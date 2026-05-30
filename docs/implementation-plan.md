@@ -1467,4 +1467,3 @@ The early MVP is complete when:
 13. Do not hide chi.
 14. Avoid clever dependency injection.
 15. Document any new public API as soon as it is introduced.
-
