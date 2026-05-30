@@ -9,8 +9,8 @@ import (
 
 // testModule is a minimal Module implementation for testing.
 type testModule struct {
-	name      string
-	register  func(ctx context.Context, app *App) error
+	name     string
+	register func(ctx context.Context, app *App) error
 }
 
 func (m testModule) Name() string { return m.name }

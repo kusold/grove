@@ -1,0 +1,12 @@
+# Nix
+.direnv/
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work.sum
