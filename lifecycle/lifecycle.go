@@ -6,6 +6,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 )
@@ -46,21 +47,27 @@ func (m *Manager) Append(h Hook) {
 }
 
 // Start runs all registered hook Start functions in registration order. If a
-// hook returns an error, Start stops and returns that error without running
-// any remaining hooks.
+// hook returns an error, Start stops any hooks that already started and returns
+// the start error.
 func (m *Manager) Start(ctx context.Context) error {
 	m.mu.Lock()
 	hooks := make([]Hook, len(m.hooks))
 	copy(hooks, m.hooks)
 	m.mu.Unlock()
 
+	var started []Hook
 	for _, h := range hooks {
 		if h.Start == nil {
 			continue
 		}
 		if err := h.Start(ctx); err != nil {
-			return fmt.Errorf("lifecycle hook %q start: %w", h.Name, err)
+			startErr := fmt.Errorf("lifecycle hook %q start: %w", h.Name, err)
+			if stopErr := stopHooks(ctx, started); stopErr != nil {
+				return errors.Join(startErr, fmt.Errorf("lifecycle startup rollback: %w", stopErr))
+			}
+			return startErr
 		}
+		started = append(started, h)
 	}
 	return nil
 }
@@ -75,6 +82,10 @@ func (m *Manager) Stop(ctx context.Context) error {
 	copy(hooks, m.hooks)
 	m.mu.Unlock()
 
+	return stopHooks(ctx, hooks)
+}
+
+func stopHooks(ctx context.Context, hooks []Hook) error {
 	var firstErr error
 	for i := len(hooks) - 1; i >= 0; i-- {
 		h := hooks[i]

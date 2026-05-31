@@ -96,6 +96,101 @@ func TestStart(t *testing.T) {
 		}
 	})
 
+	t.Run("rolls back started hooks on error", func(t *testing.T) {
+		m := New()
+		var order []string
+		hookErr := errors.New("boom")
+
+		m.Append(Hook{
+			Name: "a",
+			Start: func(ctx context.Context) error {
+				order = append(order, "start-a")
+				return nil
+			},
+			Stop: func(ctx context.Context) error {
+				order = append(order, "stop-a")
+				return nil
+			},
+		})
+		m.Append(Hook{
+			Name: "b",
+			Start: func(ctx context.Context) error {
+				order = append(order, "start-b")
+				return nil
+			},
+			Stop: func(ctx context.Context) error {
+				order = append(order, "stop-b")
+				return nil
+			},
+		})
+		m.Append(Hook{
+			Name: "c",
+			Start: func(ctx context.Context) error {
+				order = append(order, "start-c")
+				return hookErr
+			},
+			Stop: func(ctx context.Context) error {
+				order = append(order, "stop-c")
+				return nil
+			},
+		})
+		m.Append(Hook{
+			Name: "d",
+			Start: func(ctx context.Context) error {
+				order = append(order, "start-d")
+				return nil
+			},
+			Stop: func(ctx context.Context) error {
+				order = append(order, "stop-d")
+				return nil
+			},
+		})
+
+		err := m.Start(context.Background())
+		if err == nil {
+			t.Fatal("expected error from Start()")
+		}
+		if !errors.Is(err, hookErr) {
+			t.Errorf("error = %v, want to wrap %v", err, hookErr)
+		}
+		want := []string{"start-a", "start-b", "start-c", "stop-b", "stop-a"}
+		if len(order) != len(want) {
+			t.Fatalf("order = %v, want %v", order, want)
+		}
+		for i, v := range order {
+			if v != want[i] {
+				t.Errorf("order[%d] = %q, want %q", i, v, want[i])
+			}
+		}
+	})
+
+	t.Run("returns rollback error with start error", func(t *testing.T) {
+		m := New()
+		startErr := errors.New("start boom")
+		stopErr := errors.New("stop boom")
+
+		m.Append(Hook{
+			Name:  "a",
+			Start: func(ctx context.Context) error { return nil },
+			Stop:  func(ctx context.Context) error { return stopErr },
+		})
+		m.Append(Hook{
+			Name:  "b",
+			Start: func(ctx context.Context) error { return startErr },
+		})
+
+		err := m.Start(context.Background())
+		if err == nil {
+			t.Fatal("expected error from Start()")
+		}
+		if !errors.Is(err, startErr) {
+			t.Errorf("error = %v, want to wrap start error %v", err, startErr)
+		}
+		if !errors.Is(err, stopErr) {
+			t.Errorf("error = %v, want to wrap rollback error %v", err, stopErr)
+		}
+	})
+
 	t.Run("skips nil Start functions", func(t *testing.T) {
 		m := New()
 		var ran []string
