@@ -36,10 +36,6 @@ func Run(ctx context.Context, module Module, opts ...Option) error {
 		return fmt.Errorf("option error: %w", err)
 	}
 
-	if err := app.validateCapabilities(); err != nil {
-		return err
-	}
-
 	if err := module.Register(ctx, app); err != nil {
 		return fmt.Errorf("module %q registration failed: %w", module.Name(), err)
 	}
