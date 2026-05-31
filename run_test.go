@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -517,6 +520,81 @@ func TestAppLifecycle(t *testing.T) {
 			if v != want[i] {
 				t.Errorf("order[%d] = %q, want %q", i, v, want[i])
 			}
+		}
+	})
+}
+
+func TestAppHTTP(t *testing.T) {
+	t.Run("HTTP returns registry when WithHTTP is enabled", func(t *testing.T) {
+		app, err := newApp("test", WithHTTP())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		reg := app.HTTP()
+		if reg == nil {
+			t.Fatal("app.HTTP() returned nil")
+		}
+	})
+
+	t.Run("HTTP returns same registry on each call", func(t *testing.T) {
+		app, err := newApp("test", WithHTTP())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		reg1 := app.HTTP()
+		reg2 := app.HTTP()
+		if reg1 != reg2 {
+			t.Error("app.HTTP() should return the same registry each time")
+		}
+	})
+
+	t.Run("HTTP panics when capability not enabled", func(t *testing.T) {
+		app, err := newApp("test")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Fatal("expected HTTP() to panic when capability not enabled")
+			}
+			msg, ok := r.(string)
+			if !ok {
+				t.Fatalf("panic value = %v, want string", r)
+			}
+			if !strings.Contains(msg, "http capability is required but was not enabled") {
+				t.Errorf("panic = %q, want to contain 'http capability is required but was not enabled'", msg)
+			}
+			if !strings.Contains(msg, "grove.WithHTTP()") {
+				t.Errorf("panic = %q, want to contain 'grove.WithHTTP()'", msg)
+			}
+		}()
+
+		app.HTTP()
+	})
+
+	t.Run("registry routes work through app", func(t *testing.T) {
+		app, err := newApp("test", WithHTTP())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		reg := app.HTTP()
+		reg.Get("/test", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, "ok")
+		})
+
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		rec := httptest.NewRecorder()
+		reg.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+		}
+		if body := rec.Body.String(); body != "ok" {
+			t.Errorf("body = %q, want %q", body, "ok")
 		}
 	})
 }

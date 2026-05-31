@@ -9,6 +9,7 @@ import (
 
 	"github.com/kusold/grove/config"
 	"github.com/kusold/grove/health"
+	"github.com/kusold/grove/httpx"
 	"github.com/kusold/grove/lifecycle"
 )
 
@@ -109,6 +110,12 @@ func (b *builder) validateCapabilities() error {
 
 func (b *builder) buildApp() *App {
 	cfg := config.Load(b.name)
+
+	var httpReg *httpx.Registry
+	if b.hasCapability(capHTTP) {
+		httpReg = httpx.New()
+	}
+
 	return &App{
 		name:         b.name,
 		capabilities: b.capabilitySet(),
@@ -116,6 +123,7 @@ func (b *builder) buildApp() *App {
 		logger:       newLogger(b.name, cfg, os.Stdout),
 		lifecycle:    lifecycle.New(),
 		healthReg:    health.New(),
+		httpReg:      httpReg,
 	}
 }
 
