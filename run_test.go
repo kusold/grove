@@ -230,8 +230,8 @@ func TestApp(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		cfg := app.Config()
-		if cfg.Service.Name != "my-service" {
-			t.Errorf("Config().Service.Name = %q, want %q", cfg.Service.Name, "my-service")
+		if cfg.Service().Name != "my-service" {
+			t.Errorf("Config().Service().Name = %q, want %q", cfg.Service().Name, "my-service")
 		}
 	})
 
@@ -241,14 +241,14 @@ func TestApp(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		cfg := app.Config()
-		if cfg.Service.Environment != "development" {
-			t.Errorf("Config().Service.Environment = %q, want %q", cfg.Service.Environment, "development")
+		if cfg.Service().Environment != "development" {
+			t.Errorf("Config().Service().Environment = %q, want %q", cfg.Service().Environment, "development")
 		}
-		if cfg.Service.Version != "dev" {
-			t.Errorf("Config().Service.Version = %q, want %q", cfg.Service.Version, "dev")
+		if cfg.Service().Version != "dev" {
+			t.Errorf("Config().Service().Version = %q, want %q", cfg.Service().Version, "dev")
 		}
-		if cfg.HTTP.Addr != ":8080" {
-			t.Errorf("Config().HTTP.Addr = %q, want %q", cfg.HTTP.Addr, ":8080")
+		if cfg.HTTP().Addr != ":8080" {
+			t.Errorf("Config().HTTP().Addr = %q, want %q", cfg.HTTP().Addr, ":8080")
 		}
 	})
 
@@ -259,8 +259,8 @@ func TestApp(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		cfg := app.Config()
-		if cfg.Service.Name != "overridden" {
-			t.Errorf("Config().Service.Name = %q, want %q", cfg.Service.Name, "overridden")
+		if cfg.Service().Name != "overridden" {
+			t.Errorf("Config().Service().Name = %q, want %q", cfg.Service().Name, "overridden")
 		}
 		// Module identity is unchanged
 		if app.Name() != "module-name" {

@@ -12,17 +12,26 @@
 // If both Module.Name() and SERVICE_NAME are set, SERVICE_NAME overrides the
 // runtime config but does not change module identity. This distinction is
 // important: Module.Name() is the stable identifier used for logging and
-// wiring, while Config.Service.Name is the runtime name that may differ per
+// wiring, while Config.Service().Name is the runtime name that may differ per
 // deployment.
 package config
 
 import "os"
 
+// Provider exposes Grove service configuration without requiring callers to
+// depend on a concrete config source.
+type Provider interface {
+	Service() ServiceConfig
+	HTTP() HTTPConfig
+}
+
 // Config holds all configuration for a Grove service, grouped by subsystem.
 type Config struct {
-	Service ServiceConfig
-	HTTP    HTTPConfig
+	service ServiceConfig
+	http    HTTPConfig
 }
+
+var _ Provider = (*Config)(nil)
 
 // ServiceConfig holds service identity configuration.
 type ServiceConfig struct {
@@ -53,15 +62,25 @@ type HTTPConfig struct {
 // default service name when SERVICE_NAME is not set in the environment.
 func Load(moduleName string) *Config {
 	return &Config{
-		Service: ServiceConfig{
+		service: ServiceConfig{
 			Name:        envOr("SERVICE_NAME", moduleName),
 			Environment: envOr("SERVICE_ENV", "development"),
 			Version:     envOr("SERVICE_VERSION", "dev"),
 		},
-		HTTP: HTTPConfig{
+		http: HTTPConfig{
 			Addr: envOr("HTTP_ADDR", ":8080"),
 		},
 	}
+}
+
+// Service returns service identity configuration.
+func (c *Config) Service() ServiceConfig {
+	return c.service
+}
+
+// HTTP returns HTTP server configuration.
+func (c *Config) HTTP() HTTPConfig {
+	return c.http
 }
 
 // envOr returns the value of the environment variable named by the key, or
