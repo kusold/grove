@@ -57,6 +57,10 @@ type ServiceConfig struct {
 type HTTPConfig struct {
 	// Addr is the listen address for the HTTP server (e.g. ":8080").
 	Addr string
+
+	// ShutdownTimeout is the maximum duration to wait for the HTTP server to
+	// complete in-flight requests during graceful shutdown. Defaults to "10s".
+	ShutdownTimeout string
 }
 
 // LoggerConfig holds logger configuration.
@@ -85,7 +89,8 @@ func Load(moduleName string) *Config {
 			Version:     envOr("SERVICE_VERSION", "dev"),
 		},
 		http: HTTPConfig{
-			Addr: envOr("HTTP_ADDR", ":8080"),
+			Addr:            envOr("HTTP_ADDR", ":8080"),
+			ShutdownTimeout: envOr("HTTP_SHUTDOWN_TIMEOUT", "10s"),
 		},
 		logger: LoggerConfig{
 			Format: envOr("LOG_FORMAT", "text"),
