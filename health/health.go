@@ -142,16 +142,20 @@ func (r *Registry) serveCheck(w http.ResponseWriter, req *http.Request, checks [
 	if err == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"}); err != nil {
+			return
+		}
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusServiceUnavailable)
-	json.NewEncoder(w).Encode(map[string]any{
+	if err := json.NewEncoder(w).Encode(map[string]any{
 		"status": failStatus,
 		"checks": results,
-	})
+	}); err != nil {
+		return
+	}
 }
 
 // runChecks executes all checks and returns the first error encountered. All
