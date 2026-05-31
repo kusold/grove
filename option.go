@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/kusold/grove/config"
+	"github.com/kusold/grove/health"
 	"github.com/kusold/grove/lifecycle"
 )
 
@@ -114,6 +115,7 @@ func (b *builder) buildApp() *App {
 		cfg:          cfg,
 		logger:       newLogger(b.name, cfg, os.Stdout),
 		lifecycle:    lifecycle.New(),
+		healthReg:    health.New(),
 	}
 }
 

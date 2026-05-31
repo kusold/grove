@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/kusold/grove/config"
+	"github.com/kusold/grove/health"
 	"github.com/kusold/grove/lifecycle"
 )
 
@@ -17,6 +18,7 @@ type App struct {
 	cfg          config.Provider
 	logger       *slog.Logger
 	lifecycle    *lifecycle.Manager
+	healthReg    *health.Registry
 }
 
 // Name returns the service name, derived from Module.Name().
@@ -44,6 +46,14 @@ func (a *App) Logger() *slog.Logger {
 // shutdown.
 func (a *App) Lifecycle() *lifecycle.Manager {
 	return a.lifecycle
+}
+
+// Health returns the health and readiness registry. Services can register
+// health checks (for liveness) and readiness checks (for traffic readiness)
+// through this registry. The HTTP capability wires /healthz and /readyz
+// routes to these checks automatically.
+func (a *App) Health() *health.Registry {
+	return a.healthReg
 }
 
 // hasCapability reports whether a capability is enabled.
