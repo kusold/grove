@@ -6,6 +6,7 @@ import (
 
 	"github.com/kusold/grove/config"
 	"github.com/kusold/grove/health"
+	"github.com/kusold/grove/httpx"
 	"github.com/kusold/grove/lifecycle"
 )
 
@@ -19,6 +20,7 @@ type App struct {
 	logger       *slog.Logger
 	lifecycle    *lifecycle.Manager
 	healthReg    *health.Registry
+	httpReg      *httpx.Registry
 }
 
 // Name returns the service name, derived from Module.Name().
@@ -54,6 +56,17 @@ func (a *App) Lifecycle() *lifecycle.Manager {
 // routes to these checks automatically.
 func (a *App) Health() *health.Registry {
 	return a.healthReg
+}
+
+// HTTP returns the HTTP registry for registering routes and middleware.
+// It panics with a clear error message if the HTTP capability was not enabled
+// via grove.WithHTTP(). This fail-fast behavior ensures missing capabilities
+// are caught during module registration rather than at request time.
+func (a *App) HTTP() *httpx.Registry {
+	if err := a.requireCapability(capHTTP); err != nil {
+		panic(err.Error())
+	}
+	return a.httpReg
 }
 
 // hasCapability reports whether a capability is enabled.
