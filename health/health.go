@@ -1,6 +1,17 @@
 // Package health provides health and readiness check registries for Grove
-// services. Health checks determine whether a service process is alive (liveness),
-// while readiness checks determine whether it is prepared to accept traffic.
+// services.
+//
+// Health and readiness answer related but different operational questions.
+// Health checks are liveness checks: they tell a supervisor whether the service
+// process is still alive and should be kept running. Readiness checks tell a
+// load balancer, orchestrator, or deployment controller whether this particular
+// process should receive traffic right now.
+//
+// Health checks should usually be local to the process and cheap to evaluate.
+// A dependency outage should not normally make a process unhealthy, because
+// restarting every instance rarely fixes a shared downstream failure. Readiness
+// checks may depend on infrastructure the service needs to handle requests, such
+// as database connectivity or migration state.
 //
 // In Phase 1, both /healthz and /readyz return 200 unconditionally. As
 // capabilities like Postgres and migrations are added, checks can be registered
@@ -105,9 +116,15 @@ func (r *Registry) readinessChecks() []Check {
 	return checks
 }
 
-// HealthzHandler returns an http.HandlerFunc that evaluates health checks and
-// returns HTTP 200 when healthy or HTTP 503 when not. In Phase 1, with no
-// checks registered, it always returns 200.
+// HealthzHandler returns an http.HandlerFunc for liveness probes.
+//
+// /healthz should answer "is this process alive enough to keep running?" A
+// failing health response is a signal to restart or replace the process. Health
+// checks should therefore avoid depending on external infrastructure unless a
+// failed dependency means this process itself is wedged.
+//
+// The handler returns HTTP 200 when healthy or HTTP 503 when not. In Phase 1,
+// with no checks registered, it always returns 200.
 //
 // Response body (healthy):
 //
@@ -122,9 +139,16 @@ func (r *Registry) HealthzHandler() http.HandlerFunc {
 	}
 }
 
-// ReadyzHandler returns an http.HandlerFunc that evaluates readiness checks and
-// returns HTTP 200 when ready or HTTP 503 when not. In Phase 1, with no checks
-// registered, it always returns 200.
+// ReadyzHandler returns an http.HandlerFunc for readiness probes.
+//
+// /readyz should answer "should this process receive traffic right now?" A
+// failing readiness response is a signal to remove the process from serving
+// rotation without necessarily restarting it. Readiness checks may include
+// dependencies required to serve requests, such as database connectivity,
+// migration state, or warm caches.
+//
+// The handler returns HTTP 200 when ready or HTTP 503 when not. In Phase 1,
+// with no checks registered, it always returns 200.
 //
 // Response body (ready):
 //
