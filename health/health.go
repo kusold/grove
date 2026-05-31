@@ -72,24 +72,32 @@ func (r *Registry) RegisterReadiness(check Check) {
 // check passes, or an error describing the first failure. All checks are run
 // even if one fails, so that all failures can be reported.
 func (r *Registry) IsHealthy(ctx context.Context) (err error) {
-	r.mu.Lock()
-	checks := make([]Check, len(r.health))
-	copy(checks, r.health)
-	r.mu.Unlock()
-
-	return runChecks(ctx, checks)
+	return runChecks(ctx, r.healthChecks())
 }
 
 // IsReady evaluates all registered readiness checks. It returns nil if every
 // check passes, or an error describing the first failure. All checks are run
 // even if one fails, so that all failures can be reported.
 func (r *Registry) IsReady(ctx context.Context) (err error) {
+	return runChecks(ctx, r.readinessChecks())
+}
+
+func (r *Registry) healthChecks() []Check {
 	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	checks := make([]Check, len(r.health))
+	copy(checks, r.health)
+	return checks
+}
+
+func (r *Registry) readinessChecks() []Check {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	checks := make([]Check, len(r.readiness))
 	copy(checks, r.readiness)
-	r.mu.Unlock()
-
-	return runChecks(ctx, checks)
+	return checks
 }
 
 // HealthzHandler returns an http.HandlerFunc that evaluates health checks and
@@ -105,7 +113,7 @@ func (r *Registry) IsReady(ctx context.Context) (err error) {
 //	{"status": "unhealthy", "checks": [{"name": "db", "status": "failing", "error": "connection refused"}]}
 func (r *Registry) HealthzHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
-		r.serveCheck(w, req, r.IsHealthy, "unhealthy")
+		r.serveCheck(w, req, r.healthChecks(), "unhealthy")
 	}
 }
 
@@ -122,49 +130,20 @@ func (r *Registry) HealthzHandler() http.HandlerFunc {
 //	{"status": "not_ready", "checks": [{"name": "db", "status": "failing", "error": "connection refused"}]}
 func (r *Registry) ReadyzHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
-		r.serveCheck(w, req, r.IsReady, "not_ready")
+		r.serveCheck(w, req, r.readinessChecks(), "not_ready")
 	}
 }
 
 // serveCheck is the shared logic for both /healthz and /readyz. It evaluates
-// the given check function, writes a JSON response, and sets the appropriate
+// the given checks, writes a JSON response, and sets the appropriate
 // HTTP status code.
-func (r *Registry) serveCheck(w http.ResponseWriter, req *http.Request, checkFn func(context.Context) error, failStatus string) {
-	ctx := req.Context()
-
-	if err := checkFn(ctx); err == nil {
+func (r *Registry) serveCheck(w http.ResponseWriter, req *http.Request, checks []Check, failStatus string) {
+	results, err := runChecksWithResults(req.Context(), checks)
+	if err == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		return
-	}
-
-	// Re-run checks individually to build per-check results.
-	r.mu.Lock()
-	var checks []Check
-	if failStatus == "unhealthy" {
-		checks = make([]Check, len(r.health))
-		copy(checks, r.health)
-	} else {
-		checks = make([]Check, len(r.readiness))
-		copy(checks, r.readiness)
-	}
-	r.mu.Unlock()
-
-	results := make([]checkResult, 0, len(checks))
-	for _, c := range checks {
-		if err := c.Check(ctx); err != nil {
-			results = append(results, checkResult{
-				Name:   c.Name,
-				Status: "failing",
-				Error:  err.Error(),
-			})
-		} else {
-			results = append(results, checkResult{
-				Name:   c.Name,
-				Status: "passing",
-			})
-		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -185,4 +164,27 @@ func runChecks(ctx context.Context, checks []Check) error {
 		}
 	}
 	return firstErr
+}
+
+func runChecksWithResults(ctx context.Context, checks []Check) ([]checkResult, error) {
+	results := make([]checkResult, 0, len(checks))
+	var firstErr error
+	for _, c := range checks {
+		if err := c.Check(ctx); err != nil {
+			results = append(results, checkResult{
+				Name:   c.Name,
+				Status: "failing",
+				Error:  err.Error(),
+			})
+			if firstErr == nil {
+				firstErr = err
+			}
+		} else {
+			results = append(results, checkResult{
+				Name:   c.Name,
+				Status: "passing",
+			})
+		}
+	}
+	return results, firstErr
 }

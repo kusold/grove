@@ -286,6 +286,46 @@ func TestRegistry_HealthzHandler(t *testing.T) {
 		}
 	})
 
+	t.Run("evaluates failing checks once", func(t *testing.T) {
+		r := New()
+		calls := 0
+		r.RegisterHealth(Check{
+			Name: "transient",
+			Check: func(ctx context.Context) error {
+				calls++
+				if calls == 1 {
+					return errors.New("first failure")
+				}
+				return nil
+			},
+		})
+		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+		w := httptest.NewRecorder()
+		r.HealthzHandler()(w, req)
+		resp := w.Result()
+		if resp.StatusCode != http.StatusServiceUnavailable {
+			t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusServiceUnavailable)
+		}
+		if calls != 1 {
+			t.Fatalf("check calls = %d, want 1", calls)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("invalid JSON: %v", err)
+		}
+		checks, ok := body["checks"].([]any)
+		if !ok || len(checks) != 1 {
+			t.Fatalf("checks = %v, want 1 check", body["checks"])
+		}
+		check := checks[0].(map[string]any)
+		if check["status"] != "failing" {
+			t.Errorf("check status = %v, want %q", check["status"], "failing")
+		}
+		if check["error"] != "first failure" {
+			t.Errorf("check error = %v, want %q", check["error"], "first failure")
+		}
+	})
+
 	t.Run("returns 503 with mixed passing and failing checks", func(t *testing.T) {
 		r := New()
 		r.RegisterHealth(Check{
