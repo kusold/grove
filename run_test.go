@@ -28,7 +28,7 @@ func (m testModule) Register(ctx context.Context, app *App) error {
 
 func clearConfigEnv(t *testing.T) {
 	t.Helper()
-	for _, key := range []string{"SERVICE_NAME", "SERVICE_ENV", "SERVICE_VERSION", "HTTP_ADDR", "LOG_FORMAT"} {
+	for _, key := range []string{"SERVICE_NAME", "SERVICE_ENV", "SERVICE_VERSION", "HTTP_ADDR", "LOG_FORMAT", "LOG_COLOR"} {
 		t.Setenv(key, "")
 	}
 }
@@ -513,7 +513,7 @@ func TestAppLogger(t *testing.T) {
 		logger.Info("test message")
 
 		var record map[string]any
-		if err := json.Unmarshal([]byte(buf.String()), &record); err != nil {
+		if err := json.Unmarshal(buf.Bytes(), &record); err != nil {
 			t.Fatalf("output should be valid JSON: %v, got: %s", err, buf.String())
 		}
 		if record["service"] != "json-svc" {
@@ -542,6 +542,119 @@ func TestAppLogger(t *testing.T) {
 		}
 		if !strings.Contains(output, "service=text-svc") {
 			t.Errorf("output should contain service attribute, got: %s", output)
+		}
+	})
+
+	t.Run("Logger colorizes levels when LOG_COLOR=on with text format", func(t *testing.T) {
+		clearConfigEnv(t)
+		t.Setenv("LOG_COLOR", "on")
+
+		var buf bytes.Buffer
+		cfg := config.Load("color-svc")
+		logger := newLogger(cfg, &buf)
+		logger.Info("test message")
+
+		got := buf.String()
+		if !strings.Contains(got, "\x1b[32mlevel=INFO\x1b[0m") {
+			t.Fatalf("expected green info level, got %q", got)
+		}
+	})
+
+	t.Run("Logger does not colorize when LOG_COLOR=off", func(t *testing.T) {
+		clearConfigEnv(t)
+		t.Setenv("LOG_COLOR", "off")
+
+		var buf bytes.Buffer
+		cfg := config.Load("nocolor-svc")
+		logger := newLogger(cfg, &buf)
+		logger.Info("test message")
+
+		got := buf.String()
+		if strings.Contains(got, "\x1b[") {
+			t.Fatalf("expected no ANSI escapes, got %q", got)
+		}
+		if !strings.Contains(got, "level=INFO") {
+			t.Fatalf("expected level=INFO, got %q", got)
+		}
+	})
+
+	t.Run("Logger auto colorize skips non-terminal writers", func(t *testing.T) {
+		clearConfigEnv(t)
+		// default LOG_COLOR is "auto", buf is not a terminal
+
+		var buf bytes.Buffer
+		cfg := config.Load("auto-svc")
+		logger := newLogger(cfg, &buf)
+		logger.Info("test message")
+
+		got := buf.String()
+		if strings.Contains(got, "\x1b[") {
+			t.Fatalf("expected no ANSI escapes for non-terminal writer, got %q", got)
+		}
+	})
+
+	t.Run("Logger does not colorize JSON output even with LOG_COLOR=on", func(t *testing.T) {
+		clearConfigEnv(t)
+		t.Setenv("LOG_FORMAT", "json")
+		t.Setenv("LOG_COLOR", "on")
+
+		var buf bytes.Buffer
+		cfg := config.Load("json-color-svc")
+		logger := newLogger(cfg, &buf)
+		logger.Info("test message")
+
+		got := buf.String()
+		if strings.Contains(got, "\x1b[") {
+			t.Fatalf("expected no ANSI escapes in JSON, got %q", got)
+		}
+	})
+}
+
+func TestColorLevels(t *testing.T) {
+	t.Run("colorizes all slog levels", func(t *testing.T) {
+		tests := []struct {
+			level string
+			color string
+		}{
+			{"ERROR", "\x1b[31m"},
+			{"WARN", "\x1b[33m"},
+			{"INFO", "\x1b[32m"},
+			{"DEBUG", "\x1b[34m"},
+		}
+		for _, tt := range tests {
+			t.Run(tt.level, func(t *testing.T) {
+				input := []byte("level=" + tt.level + " msg=test\n")
+				got := colorLevels(input)
+				want := tt.color + "level=" + tt.level + "\x1b[0m msg=test\n"
+				if string(got) != want {
+					t.Errorf("got %q, want %q", got, want)
+				}
+			})
+		}
+	})
+
+	t.Run("only matches level field, not level in attribute values", func(t *testing.T) {
+		input := []byte("level=INFO msg=test note=\"level=INFO\"\n")
+		got := colorLevels(input)
+
+		// The actual level= field should be colored
+		if !strings.Contains(string(got), "\x1b[32mlevel=INFO\x1b[0m msg=test") {
+			t.Errorf("expected level field to be colored, got %q", got)
+		}
+		// The level= inside the quoted value should NOT be colored
+		if strings.Count(string(got), "\x1b[32mlevel=INFO\x1b[0m") != 1 {
+			t.Errorf("expected exactly one colored level, got %q", got)
+		}
+		if !strings.Contains(string(got), `note="level=INFO"`) {
+			t.Errorf("expected note value to remain intact, got %q", got)
+		}
+	})
+
+	t.Run("returns input unchanged when no level present", func(t *testing.T) {
+		input := []byte("msg=test something=else\n")
+		got := colorLevels(input)
+		if string(got) != string(input) {
+			t.Errorf("got %q, want %q", got, input)
 		}
 	})
 }

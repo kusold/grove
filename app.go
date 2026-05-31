@@ -30,9 +30,9 @@ func (a *App) Config() config.Provider {
 }
 
 // Logger returns the configured structured logger for the service. The logger
-// includes service name, environment, and version as default attributes. In
-// production, output is JSON. In all other environments, output is human-readable
-// text.
+// includes service name, environment, and version as default attributes. Log
+// format is controlled by the LOG_FORMAT env var ("text" or "json"), and
+// colorization of text output by LOG_COLOR ("on", "off", or "auto").
 func (a *App) Logger() *slog.Logger {
 	return a.logger
 }
