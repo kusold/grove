@@ -149,16 +149,19 @@ grove: postgres capability is required but was not enabled; add grove.WithPostgr
 
 ## Capability Model
 
-Capabilities should be registered with options:
+Capabilities should be registered with options. Add each public capability option
+in the phase where the capability is implemented, rather than reserving stubs for
+future features too early.
+
+The Phase 1 skeleton starts with the first capability Grove will implement:
 
 ```go
 grove.WithHTTP()
-grove.WithPostgres()
-grove.WithMigrations()
-grove.WithTenancy()
-grove.WithOpenAPI()
-grove.WithObservability()
 ```
+
+Later phases should add their own options, such as `WithPostgres`,
+`WithMigrations`, `WithTenancy`, `WithOpenAPI`, `WithOIDC`, `WithJobs`,
+`WithMail`, and `WithObservability`, when those capabilities are implemented.
 
 Each capability may contribute:
 
@@ -251,10 +254,11 @@ Build the smallest usable Grove runtime that starts Canopy as an HTTP service.
 8. Lifecycle manager with start/stop hooks.
 9. Health registry.
 10. HTTP registry backed by chi.
-11. Graceful shutdown for SIGINT and SIGTERM.
-12. `/healthz` route.
-13. `/readyz` route.
-14. Capability dependency validation framework, even if simple.
+11. Initial `WithHTTP()` capability option.
+12. Graceful shutdown for SIGINT and SIGTERM.
+13. `/healthz` route.
+14. `/readyz` route.
+15. Capability dependency validation framework, even if simple.
 
 ### Deliverables in Canopy
 
@@ -389,7 +393,8 @@ runtime config but not change the module identity. Document this clearly.
 ### Candidate GitHub Issues
 
 1. Implement Grove module interface and runtime entrypoint.
-2. Implement option builder and capability validation skeleton.
+2. Implement option builder, initial `WithHTTP()` capability option, and
+   capability validation skeleton.
 3. Implement config loading for service and HTTP settings.
 4. Implement slog logger setup.
 5. Implement lifecycle manager.
@@ -421,6 +426,7 @@ right security model.
 6. Tenant middleware.
 7. Tenant-required route middleware.
 8. Consistent error response for missing tenant.
+9. `WithTenancy()` capability option that depends on `WithHTTP()`.
 
 ### Tenant Type Sketch
 
@@ -506,8 +512,9 @@ Response:
 2. Add tenant resolver interface and header resolver.
 3. Add tenant middleware and tenant-required middleware.
 4. Add consistent JSON error response helper for missing tenant.
-5. Add Canopy tenant demo route.
-6. Add tenant middleware tests.
+5. Add `WithTenancy()` capability option and HTTP dependency validation.
+6. Add Canopy tenant demo route.
+7. Add tenant middleware tests.
 
 ## Phase 3: Postgres, RLS Foundation, and Migration Modes
 
@@ -553,6 +560,8 @@ goal.
 8. Configurable migration mode.
 9. Startup lifecycle integration.
 10. Test helpers for Postgres if practical.
+11. `WithPostgres()` and `WithMigrations()` capability options, with
+    migrations depending on Postgres.
 
 ### DB Config
 
@@ -715,16 +724,17 @@ All widget routes should require a tenant.
 
 1. Choose and document migration engine.
 2. Add Postgres config and pgxpool connection.
-3. Add DB health/readiness check.
-4. Implement `TenantTx` with transaction-local tenant setting.
-5. Implement `SystemTx` with required reason logging.
-6. Add Grove RLS SQL prelude.
-7. Implement migration registry.
-8. Implement migration mode config.
-9. Wire Canopy automatic migrations.
-10. Add Canopy tenant-scoped widgets table with RLS.
-11. Add Canopy widget routes using `TenantTx`.
-12. Add RLS isolation integration tests.
+3. Add `WithPostgres()` capability option.
+4. Add DB health/readiness check.
+5. Implement `TenantTx` with transaction-local tenant setting.
+6. Implement `SystemTx` with required reason logging.
+7. Add Grove RLS SQL prelude.
+8. Implement migration registry.
+9. Implement migration mode config and `WithMigrations()` capability option.
+10. Wire Canopy automatic migrations.
+11. Add Canopy tenant-scoped widgets table with RLS.
+12. Add Canopy widget routes using `TenantTx`.
+13. Add RLS isolation integration tests.
 
 ## Phase 4: Testkit Foundation
 
@@ -855,6 +865,7 @@ and htmx-style services.
 3. Optional `/docs` placeholder or disabled docs route.
 4. Documentation for JSON API conventions.
 5. Optional test helper to check JSON routes are documented.
+6. `WithOpenAPI()` capability option that depends on `WithHTTP()`.
 
 ### Deliverables in Canopy
 
@@ -918,11 +929,12 @@ Do not implement this warning mode until there is a concrete need.
 ### Candidate GitHub Issues
 
 1. Add Grove OpenAPI registry.
-2. Add `/openapi.json` serving capability.
-3. Add Canopy OpenAPI spec.
-4. Add oapi-codegen generation setup.
-5. Refactor one Canopy JSON handler to use generated types.
-6. Document JSON API and HTML route conventions.
+2. Add `WithOpenAPI()` capability option and HTTP dependency validation.
+3. Add `/openapi.json` serving capability.
+4. Add Canopy OpenAPI spec.
+5. Add oapi-codegen generation setup.
+6. Refactor one Canopy JSON handler to use generated types.
+7. Document JSON API and HTML route conventions.
 
 ## Phase 6: Authentication and Identity
 
@@ -946,6 +958,7 @@ Add authentication without overbuilding authorization.
 5. OIDC bearer-token validation provider.
 6. Middleware that fails closed.
 7. Hook for mapping claims to tenant resolution.
+8. `WithOIDC()` capability option that depends on `WithHTTP()`.
 
 ### Identity Sketch
 
@@ -1007,9 +1020,10 @@ Do not build RBAC in v1.
 2. Add auth provider interface.
 3. Add fake auth provider for tests.
 4. Add OIDC bearer-token provider.
-5. Add auth-required middleware.
-6. Add claim-based tenant resolver.
-7. Add Canopy auth demo route.
+5. Add `WithOIDC()` capability option and HTTP dependency validation.
+6. Add auth-required middleware.
+7. Add claim-based tenant resolver.
+8. Add Canopy auth demo route.
 
 ## Phase 7: Jobs with River
 
@@ -1031,6 +1045,7 @@ Add background jobs using River without building a custom queue.
 5. Transactional enqueue support.
 6. Tenant-aware job wrapper.
 7. Test mode.
+8. `WithJobs()` capability option that depends on `WithPostgres()`.
 
 ### API Sketch
 
@@ -1079,12 +1094,13 @@ the job should then use `TenantTx`.
 ### Candidate GitHub Issues
 
 1. Add jobs capability dependency on Postgres.
-2. Add River client setup.
-3. Add River worker lifecycle integration.
-4. Add Grove jobs registry.
-5. Add tenant-aware job wrapper.
-6. Add Canopy demo job.
-7. Add deterministic job test support.
+2. Add `WithJobs()` capability option and Postgres dependency validation.
+3. Add River client setup.
+4. Add River worker lifecycle integration.
+5. Add Grove jobs registry.
+6. Add tenant-aware job wrapper.
+7. Add Canopy demo job.
+8. Add deterministic job test support.
 
 ## Phase 8: Email
 
@@ -1105,6 +1121,7 @@ Add email through a small provider abstraction.
 4. Fake mailer.
 5. Optional SMTP provider.
 6. Test assertions for sent email.
+7. `WithMail()` capability option.
 
 ### API Sketch
 
@@ -1147,7 +1164,7 @@ type Address struct {
 1. Add mail package and message types.
 2. Add console mailer.
 3. Add fake mailer.
-4. Add mail capability and config.
+4. Add `WithMail()` capability and config.
 5. Add Canopy email demo path or job.
 6. Add mailer tests.
 
@@ -1176,6 +1193,7 @@ Provide consistent logs, request IDs, traces, metrics, and instrumentation hooks
 8. DB instrumentation where feasible.
 9. Job instrumentation.
 10. Metrics exporter or endpoint.
+11. `WithObservability()` capability option.
 
 ### Log Fields
 
@@ -1216,11 +1234,12 @@ Only include tenant/user fields when available. Never log secrets.
 2. Add panic recovery middleware.
 3. Add request logging middleware.
 4. Add structured logger context helpers.
-5. Add OpenTelemetry config and setup.
-6. Add HTTP tracing.
-7. Add DB instrumentation.
-8. Add job instrumentation.
-9. Add local observability documentation.
+5. Add `WithObservability()` capability option.
+6. Add OpenTelemetry config and setup.
+7. Add HTTP tracing.
+8. Add DB instrumentation.
+9. Add job instrumentation.
+10. Add local observability documentation.
 
 ## Phase 10: CLI and Service Generation
 
