@@ -9,4 +9,5 @@
 *.dylib
 *.test
 *.out
+coverage.html
 go.work.sum
