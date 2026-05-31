@@ -596,6 +596,12 @@ Canopy should use:
 GROVE_MIGRATIONS=up
 ```
 
+When implementing DB and migration config, reconsider whether hand-rolled env
+loading is still the right tradeoff. `github.com/caarlos0/env/v11` is a good
+candidate if typed values, defaults, required settings, and enum validation make
+manual parsing repetitive. Keep Grove's public config provider API independent
+of the parsing library either way.
+
 ### Database API Sketch
 
 ```go

@@ -5,69 +5,69 @@ import "testing"
 func TestLoad(t *testing.T) {
 	t.Run("uses module name as default service name", func(t *testing.T) {
 		cfg := Load("canopy")
-		if cfg.Service.Name != "canopy" {
-			t.Errorf("Service.Name = %q, want %q", cfg.Service.Name, "canopy")
+		if cfg.Service().Name != "canopy" {
+			t.Errorf("Service.Name = %q, want %q", cfg.Service().Name, "canopy")
 		}
 	})
 
 	t.Run("SERVICE_NAME overrides module name", func(t *testing.T) {
 		t.Setenv("SERVICE_NAME", "production-canopy")
 		cfg := Load("canopy")
-		if cfg.Service.Name != "production-canopy" {
-			t.Errorf("Service.Name = %q, want %q", cfg.Service.Name, "production-canopy")
+		if cfg.Service().Name != "production-canopy" {
+			t.Errorf("Service.Name = %q, want %q", cfg.Service().Name, "production-canopy")
 		}
 	})
 
 	t.Run("default environment is development", func(t *testing.T) {
 		cfg := Load("test")
-		if cfg.Service.Environment != "development" {
-			t.Errorf("Service.Environment = %q, want %q", cfg.Service.Environment, "development")
+		if cfg.Service().Environment != "development" {
+			t.Errorf("Service.Environment = %q, want %q", cfg.Service().Environment, "development")
 		}
 	})
 
 	t.Run("SERVICE_ENV overrides default environment", func(t *testing.T) {
 		t.Setenv("SERVICE_ENV", "production")
 		cfg := Load("test")
-		if cfg.Service.Environment != "production" {
-			t.Errorf("Service.Environment = %q, want %q", cfg.Service.Environment, "production")
+		if cfg.Service().Environment != "production" {
+			t.Errorf("Service.Environment = %q, want %q", cfg.Service().Environment, "production")
 		}
 	})
 
 	t.Run("default version is dev", func(t *testing.T) {
 		cfg := Load("test")
-		if cfg.Service.Version != "dev" {
-			t.Errorf("Service.Version = %q, want %q", cfg.Service.Version, "dev")
+		if cfg.Service().Version != "dev" {
+			t.Errorf("Service.Version = %q, want %q", cfg.Service().Version, "dev")
 		}
 	})
 
 	t.Run("SERVICE_VERSION overrides default version", func(t *testing.T) {
 		t.Setenv("SERVICE_VERSION", "v1.2.3")
 		cfg := Load("test")
-		if cfg.Service.Version != "v1.2.3" {
-			t.Errorf("Service.Version = %q, want %q", cfg.Service.Version, "v1.2.3")
+		if cfg.Service().Version != "v1.2.3" {
+			t.Errorf("Service.Version = %q, want %q", cfg.Service().Version, "v1.2.3")
 		}
 	})
 
 	t.Run("default HTTP addr is :8080", func(t *testing.T) {
 		cfg := Load("test")
-		if cfg.HTTP.Addr != ":8080" {
-			t.Errorf("HTTP.Addr = %q, want %q", cfg.HTTP.Addr, ":8080")
+		if cfg.HTTP().Addr != ":8080" {
+			t.Errorf("HTTP.Addr = %q, want %q", cfg.HTTP().Addr, ":8080")
 		}
 	})
 
 	t.Run("HTTP_ADDR overrides default addr", func(t *testing.T) {
 		t.Setenv("HTTP_ADDR", ":9090")
 		cfg := Load("test")
-		if cfg.HTTP.Addr != ":9090" {
-			t.Errorf("HTTP.Addr = %q, want %q", cfg.HTTP.Addr, ":9090")
+		if cfg.HTTP().Addr != ":9090" {
+			t.Errorf("HTTP.Addr = %q, want %q", cfg.HTTP().Addr, ":9090")
 		}
 	})
 
 	t.Run("empty env var is treated as unset", func(t *testing.T) {
 		t.Setenv("SERVICE_NAME", "")
 		cfg := Load("canopy")
-		if cfg.Service.Name != "canopy" {
-			t.Errorf("Service.Name = %q, want %q when env var is empty", cfg.Service.Name, "canopy")
+		if cfg.Service().Name != "canopy" {
+			t.Errorf("Service.Name = %q, want %q when env var is empty", cfg.Service().Name, "canopy")
 		}
 	})
 
@@ -78,17 +78,17 @@ func TestLoad(t *testing.T) {
 		t.Setenv("HTTP_ADDR", ":3000")
 
 		cfg := Load("unused-module-name")
-		if cfg.Service.Name != "my-service" {
-			t.Errorf("Service.Name = %q, want %q", cfg.Service.Name, "my-service")
+		if cfg.Service().Name != "my-service" {
+			t.Errorf("Service.Name = %q, want %q", cfg.Service().Name, "my-service")
 		}
-		if cfg.Service.Environment != "staging" {
-			t.Errorf("Service.Environment = %q, want %q", cfg.Service.Environment, "staging")
+		if cfg.Service().Environment != "staging" {
+			t.Errorf("Service.Environment = %q, want %q", cfg.Service().Environment, "staging")
 		}
-		if cfg.Service.Version != "v2.0.0" {
-			t.Errorf("Service.Version = %q, want %q", cfg.Service.Version, "v2.0.0")
+		if cfg.Service().Version != "v2.0.0" {
+			t.Errorf("Service.Version = %q, want %q", cfg.Service().Version, "v2.0.0")
 		}
-		if cfg.HTTP.Addr != ":3000" {
-			t.Errorf("HTTP.Addr = %q, want %q", cfg.HTTP.Addr, ":3000")
+		if cfg.HTTP().Addr != ":3000" {
+			t.Errorf("HTTP.Addr = %q, want %q", cfg.HTTP().Addr, ":3000")
 		}
 	})
 }
@@ -120,7 +120,7 @@ func TestLoadDoesNotReadAllEnvVars(t *testing.T) {
 		// Ensure that adding random env vars doesn't affect Load
 		t.Setenv("RANDOM_VAR_12345", "should-be-ignored")
 		cfg := Load("test")
-		if cfg.Service.Name != "test" {
+		if cfg.Service().Name != "test" {
 			t.Errorf("unexpected change from random env var")
 		}
 	})

@@ -12,7 +12,7 @@ import (
 type App struct {
 	name         string
 	capabilities map[capability]bool
-	cfg          *config.Config
+	cfg          config.Provider
 }
 
 // Name returns the service name, derived from Module.Name().
@@ -23,7 +23,7 @@ func (a *App) Name() string {
 // Config returns the service configuration loaded from environment variables.
 // The config is loaded during app construction and is available for the
 // entire lifetime of the service.
-func (a *App) Config() *config.Config {
+func (a *App) Config() config.Provider {
 	return a.cfg
 }
 
