@@ -212,6 +212,61 @@ func TestApp(t *testing.T) {
 			t.Errorf("app.Name() = %q, want %q", got, "svc-name")
 		}
 	})
+
+	t.Run("Config returns non-nil config", func(t *testing.T) {
+		app, err := newApp("test-svc")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		cfg := app.Config()
+		if cfg == nil {
+			t.Fatal("app.Config() returned nil")
+		}
+	})
+
+	t.Run("Config uses module name as default service name", func(t *testing.T) {
+		app, err := newApp("my-service")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		cfg := app.Config()
+		if cfg.Service.Name != "my-service" {
+			t.Errorf("Config().Service.Name = %q, want %q", cfg.Service.Name, "my-service")
+		}
+	})
+
+	t.Run("Config applies environment defaults", func(t *testing.T) {
+		app, err := newApp("test")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		cfg := app.Config()
+		if cfg.Service.Environment != "development" {
+			t.Errorf("Config().Service.Environment = %q, want %q", cfg.Service.Environment, "development")
+		}
+		if cfg.Service.Version != "dev" {
+			t.Errorf("Config().Service.Version = %q, want %q", cfg.Service.Version, "dev")
+		}
+		if cfg.HTTP.Addr != ":8080" {
+			t.Errorf("Config().HTTP.Addr = %q, want %q", cfg.HTTP.Addr, ":8080")
+		}
+	})
+
+	t.Run("Config SERVICE_NAME overrides module name", func(t *testing.T) {
+		t.Setenv("SERVICE_NAME", "overridden")
+		app, err := newApp("module-name")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		cfg := app.Config()
+		if cfg.Service.Name != "overridden" {
+			t.Errorf("Config().Service.Name = %q, want %q", cfg.Service.Name, "overridden")
+		}
+		// Module identity is unchanged
+		if app.Name() != "module-name" {
+			t.Errorf("app.Name() = %q, want %q — module identity should not change", app.Name(), "module-name")
+		}
+	})
 }
 
 func TestCapabilityOptions(t *testing.T) {
