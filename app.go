@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/kusold/grove/config"
+	"github.com/kusold/grove/lifecycle"
 )
 
 // App is the central runtime object for a Grove service. It holds private state
@@ -15,6 +16,7 @@ type App struct {
 	capabilities map[capability]bool
 	cfg          config.Provider
 	logger       *slog.Logger
+	lifecycle    *lifecycle.Manager
 }
 
 // Name returns the service name, derived from Module.Name().
@@ -35,6 +37,13 @@ func (a *App) Config() config.Provider {
 // colorization of text output by LOG_COLOR ("on", "off", or "auto").
 func (a *App) Logger() *slog.Logger {
 	return a.logger
+}
+
+// Lifecycle returns the lifecycle manager for registering start/stop hooks.
+// Hooks are run in registration order on startup and in reverse order on
+// shutdown.
+func (a *App) Lifecycle() *lifecycle.Manager {
+	return a.lifecycle
 }
 
 // hasCapability reports whether a capability is enabled.

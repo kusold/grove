@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/kusold/grove/config"
+	"github.com/kusold/grove/lifecycle"
 )
 
 // testModule is a minimal Module implementation for testing.
@@ -434,6 +435,88 @@ func TestCapabilityDeterministicOrder(t *testing.T) {
 		}
 		if !strings.Contains(err1.Error(), "first requires first dependency") {
 			t.Errorf("expected first error to be about the first capability, got: %s", err1)
+		}
+	})
+}
+
+func TestAppLifecycle(t *testing.T) {
+	t.Run("Lifecycle returns non-nil manager", func(t *testing.T) {
+		app, err := newApp("test-svc")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		lc := app.Lifecycle()
+		if lc == nil {
+			t.Fatal("app.Lifecycle() returned nil")
+		}
+	})
+
+	t.Run("Lifecycle returns same manager on each call", func(t *testing.T) {
+		app, err := newApp("test-svc")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		lc1 := app.Lifecycle()
+		lc2 := app.Lifecycle()
+		if lc1 != lc2 {
+			t.Error("app.Lifecycle() should return the same manager each time")
+		}
+	})
+
+	t.Run("hooks can be registered and run through app lifecycle", func(t *testing.T) {
+		var order []string
+		m := testModule{
+			name: "lifecycle-svc",
+			register: func(ctx context.Context, app *App) error {
+				app.Lifecycle().Append(lifecycle.Hook{
+					Name: "first",
+					Start: func(ctx context.Context) error {
+						order = append(order, "start-first")
+						return nil
+					},
+					Stop: func(ctx context.Context) error {
+						order = append(order, "stop-first")
+						return nil
+					},
+				})
+				app.Lifecycle().Append(lifecycle.Hook{
+					Name: "second",
+					Start: func(ctx context.Context) error {
+						order = append(order, "start-second")
+						return nil
+					},
+					Stop: func(ctx context.Context) error {
+						order = append(order, "stop-second")
+						return nil
+					},
+				})
+				return nil
+			},
+		}
+
+		app, err := newApp(m.Name())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if err := m.Register(context.Background(), app); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if err := app.Lifecycle().Start(context.Background()); err != nil {
+			t.Fatalf("Start() error: %v", err)
+		}
+		if err := app.Lifecycle().Stop(context.Background()); err != nil {
+			t.Fatalf("Stop() error: %v", err)
+		}
+
+		want := []string{"start-first", "start-second", "stop-second", "stop-first"}
+		if len(order) != len(want) {
+			t.Fatalf("order = %v, want %v", order, want)
+		}
+		for i, v := range order {
+			if v != want[i] {
+				t.Errorf("order[%d] = %q, want %q", i, v, want[i])
+			}
 		}
 	})
 }
