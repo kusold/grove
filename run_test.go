@@ -484,7 +484,7 @@ func TestAppLogger(t *testing.T) {
 
 		var buf bytes.Buffer
 		cfg := config.Load("dev-svc")
-		logger := newLogger(cfg, &buf)
+		logger := newLogger("dev-svc", cfg, &buf)
 		logger.Info("test message")
 
 		output := buf.String()
@@ -509,7 +509,7 @@ func TestAppLogger(t *testing.T) {
 
 		var buf bytes.Buffer
 		cfg := config.Load("json-svc")
-		logger := newLogger(cfg, &buf)
+		logger := newLogger("json-svc", cfg, &buf)
 		logger.Info("test message")
 
 		var record map[string]any
@@ -527,13 +527,35 @@ func TestAppLogger(t *testing.T) {
 		}
 	})
 
+	t.Run("Logger service attribute uses module identity when SERVICE_NAME overrides runtime name", func(t *testing.T) {
+		clearConfigEnv(t)
+		t.Setenv("LOG_FORMAT", "json")
+		t.Setenv("SERVICE_NAME", "production-canopy")
+
+		var buf bytes.Buffer
+		cfg := config.Load("canopy")
+		logger := newLogger("canopy", cfg, &buf)
+		logger.Info("test message")
+
+		var record map[string]any
+		if err := json.Unmarshal(buf.Bytes(), &record); err != nil {
+			t.Fatalf("output should be valid JSON: %v, got: %s", err, buf.String())
+		}
+		if cfg.Service().Name != "production-canopy" {
+			t.Fatalf("Config().Service().Name = %q, want %q", cfg.Service().Name, "production-canopy")
+		}
+		if record["service"] != "canopy" {
+			t.Errorf("service = %v, want stable module identity %q", record["service"], "canopy")
+		}
+	})
+
 	t.Run("Logger uses text format when LOG_FORMAT=text", func(t *testing.T) {
 		clearConfigEnv(t)
 		t.Setenv("LOG_FORMAT", "text")
 
 		var buf bytes.Buffer
 		cfg := config.Load("text-svc")
-		logger := newLogger(cfg, &buf)
+		logger := newLogger("text-svc", cfg, &buf)
 		logger.Info("test message")
 
 		output := buf.String()
@@ -551,7 +573,7 @@ func TestAppLogger(t *testing.T) {
 
 		var buf bytes.Buffer
 		cfg := config.Load("color-svc")
-		logger := newLogger(cfg, &buf)
+		logger := newLogger("color-svc", cfg, &buf)
 		logger.Info("test message")
 
 		got := buf.String()
@@ -566,7 +588,7 @@ func TestAppLogger(t *testing.T) {
 
 		var buf bytes.Buffer
 		cfg := config.Load("nocolor-svc")
-		logger := newLogger(cfg, &buf)
+		logger := newLogger("nocolor-svc", cfg, &buf)
 		logger.Info("test message")
 
 		got := buf.String()
@@ -584,7 +606,7 @@ func TestAppLogger(t *testing.T) {
 
 		var buf bytes.Buffer
 		cfg := config.Load("auto-svc")
-		logger := newLogger(cfg, &buf)
+		logger := newLogger("auto-svc", cfg, &buf)
 		logger.Info("test message")
 
 		got := buf.String()
@@ -600,7 +622,7 @@ func TestAppLogger(t *testing.T) {
 
 		var buf bytes.Buffer
 		cfg := config.Load("json-color-svc")
-		logger := newLogger(cfg, &buf)
+		logger := newLogger("json-color-svc", cfg, &buf)
 		logger.Info("test message")
 
 		got := buf.String()
@@ -647,6 +669,60 @@ func TestColorLevels(t *testing.T) {
 		}
 		if !strings.Contains(string(got), `note="level=INFO"`) {
 			t.Errorf("expected note value to remain intact, got %q", got)
+		}
+	})
+
+	t.Run("does not color level text in quoted messages", func(t *testing.T) {
+		input := []byte(`level=INFO msg="saw level=INFO token" note="level=WARN"` + "\n")
+		got := string(colorLevels(input))
+
+		if strings.Count(got, "\x1b[32mlevel=INFO\x1b[0m") != 1 {
+			t.Errorf("expected exactly one colored level field, got %q", got)
+		}
+		if !strings.Contains(got, `msg="saw level=INFO token"`) {
+			t.Errorf("expected message value to remain intact, got %q", got)
+		}
+		if !strings.Contains(got, `note="level=WARN"`) {
+			t.Errorf("expected note value to remain intact, got %q", got)
+		}
+	})
+
+	t.Run("colors only the first level field per line", func(t *testing.T) {
+		input := []byte("level=INFO msg=test level=ERROR\n")
+		got := string(colorLevels(input))
+
+		if strings.Count(got, "\x1b[32mlevel=INFO\x1b[0m") != 1 {
+			t.Errorf("expected builtin level to be colored once, got %q", got)
+		}
+		if strings.Contains(got, "\x1b[31mlevel=ERROR\x1b[0m") {
+			t.Errorf("expected later level attribute to remain uncolored, got %q", got)
+		}
+		if !strings.Contains(got, " level=ERROR") {
+			t.Errorf("expected later level attribute to remain present, got %q", got)
+		}
+	})
+
+	t.Run("colors one level field on each line", func(t *testing.T) {
+		input := []byte("level=INFO msg=one\nlevel=ERROR msg=two\n")
+		got := string(colorLevels(input))
+
+		if !strings.Contains(got, "\x1b[32mlevel=INFO\x1b[0m msg=one") {
+			t.Errorf("expected info level to be colored, got %q", got)
+		}
+		if !strings.Contains(got, "\x1b[31mlevel=ERROR\x1b[0m msg=two") {
+			t.Errorf("expected error level to be colored, got %q", got)
+		}
+	})
+
+	t.Run("colorizes custom slog level names by level family", func(t *testing.T) {
+		input := []byte("level=INFO+2 msg=custom\nlevel=ERROR+4 msg=custom\n")
+		got := string(colorLevels(input))
+
+		if !strings.Contains(got, "\x1b[32mlevel=INFO+2\x1b[0m msg=custom") {
+			t.Errorf("expected custom info level to be colored, got %q", got)
+		}
+		if !strings.Contains(got, "\x1b[31mlevel=ERROR+4\x1b[0m msg=custom") {
+			t.Errorf("expected custom error level to be colored, got %q", got)
 		}
 	})
 
