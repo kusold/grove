@@ -115,8 +115,7 @@ func (b *builder) buildApp() *App {
 }
 
 // newLogger creates a slog.Logger configured with structured attributes for
-// service identity. It uses a JSON handler in production and a text handler
-// in all other environments.
+// service identity. The handler format is determined by cfg.Logger().Format.
 func newLogger(cfg config.Provider, w io.Writer) *slog.Logger {
 	svc := cfg.Service()
 	attrs := []slog.Attr{
@@ -128,9 +127,10 @@ func newLogger(cfg config.Provider, w io.Writer) *slog.Logger {
 	var handler slog.Handler
 	opts := &slog.HandlerOptions{AddSource: false}
 
-	if svc.Environment == "production" {
+	switch cfg.Logger().Format {
+	case "json":
 		handler = slog.NewJSONHandler(w, opts)
-	} else {
+	default:
 		handler = slog.NewTextHandler(w, opts)
 	}
 

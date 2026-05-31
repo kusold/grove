@@ -28,7 +28,7 @@ func (m testModule) Register(ctx context.Context, app *App) error {
 
 func clearConfigEnv(t *testing.T) {
 	t.Helper()
-	for _, key := range []string{"SERVICE_NAME", "SERVICE_ENV", "SERVICE_VERSION", "HTTP_ADDR"} {
+	for _, key := range []string{"SERVICE_NAME", "SERVICE_ENV", "SERVICE_VERSION", "HTTP_ADDR", "LOG_FORMAT"} {
 		t.Setenv(key, "")
 	}
 }
@@ -479,7 +479,7 @@ func TestAppLogger(t *testing.T) {
 		}
 	})
 
-	t.Run("Logger uses text handler in development", func(t *testing.T) {
+	t.Run("Logger defaults to text format", func(t *testing.T) {
 		clearConfigEnv(t)
 
 		var buf bytes.Buffer
@@ -488,9 +488,8 @@ func TestAppLogger(t *testing.T) {
 		logger.Info("test message")
 
 		output := buf.String()
-		// Text handler output is not JSON
 		if strings.HasPrefix(output, "{") {
-			t.Error("expected text output in development, got JSON")
+			t.Error("expected text output by default, got JSON")
 		}
 		if !strings.Contains(output, "service=dev-svc") {
 			t.Errorf("output should contain service attribute, got: %s", output)
@@ -503,28 +502,46 @@ func TestAppLogger(t *testing.T) {
 		}
 	})
 
-	t.Run("Logger uses JSON handler in production", func(t *testing.T) {
+	t.Run("Logger uses JSON format when LOG_FORMAT=json", func(t *testing.T) {
 		clearConfigEnv(t)
-		t.Setenv("SERVICE_ENV", "production")
+		t.Setenv("LOG_FORMAT", "json")
 		t.Setenv("SERVICE_VERSION", "v1.0.0")
 
 		var buf bytes.Buffer
-		cfg := config.Load("prod-svc")
+		cfg := config.Load("json-svc")
 		logger := newLogger(cfg, &buf)
 		logger.Info("test message")
 
 		var record map[string]any
 		if err := json.Unmarshal([]byte(buf.String()), &record); err != nil {
-			t.Fatalf("output should be valid JSON in production: %v, got: %s", err, buf.String())
+			t.Fatalf("output should be valid JSON: %v, got: %s", err, buf.String())
 		}
-		if record["service"] != "prod-svc" {
-			t.Errorf("service = %v, want %q", record["service"], "prod-svc")
+		if record["service"] != "json-svc" {
+			t.Errorf("service = %v, want %q", record["service"], "json-svc")
 		}
-		if record["environment"] != "production" {
-			t.Errorf("environment = %v, want %q", record["environment"], "production")
+		if record["environment"] != "development" {
+			t.Errorf("environment = %v, want %q", record["environment"], "development")
 		}
 		if record["version"] != "v1.0.0" {
 			t.Errorf("version = %v, want %q", record["version"], "v1.0.0")
+		}
+	})
+
+	t.Run("Logger uses text format when LOG_FORMAT=text", func(t *testing.T) {
+		clearConfigEnv(t)
+		t.Setenv("LOG_FORMAT", "text")
+
+		var buf bytes.Buffer
+		cfg := config.Load("text-svc")
+		logger := newLogger(cfg, &buf)
+		logger.Info("test message")
+
+		output := buf.String()
+		if strings.HasPrefix(output, "{") {
+			t.Error("expected text output, got JSON")
+		}
+		if !strings.Contains(output, "service=text-svc") {
+			t.Errorf("output should contain service attribute, got: %s", output)
 		}
 	})
 }

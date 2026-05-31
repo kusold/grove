@@ -8,6 +8,7 @@
 //	SERVICE_ENV      — deployment environment (default: "development")
 //	SERVICE_VERSION  — service version string (default: "dev")
 //	HTTP_ADDR        — listen address for the HTTP server (default: ":8080")
+//	LOG_FORMAT       — log output format: "text" or "json" (default: "text")
 //
 // If both Module.Name() and SERVICE_NAME are set, SERVICE_NAME overrides the
 // runtime config but does not change module identity. This distinction is
@@ -23,12 +24,14 @@ import "os"
 type Provider interface {
 	Service() ServiceConfig
 	HTTP() HTTPConfig
+	Logger() LoggerConfig
 }
 
 // Config holds all configuration for a Grove service, grouped by subsystem.
 type Config struct {
 	service ServiceConfig
 	http    HTTPConfig
+	logger  LoggerConfig
 }
 
 var _ Provider = (*Config)(nil)
@@ -55,6 +58,13 @@ type HTTPConfig struct {
 	Addr string
 }
 
+// LoggerConfig holds logger configuration.
+type LoggerConfig struct {
+	// Format controls the log output format. Valid values are "text" and "json".
+	// Defaults to "text".
+	Format string
+}
+
 // Load reads configuration from environment variables. It applies sensible
 // defaults for any values that are not explicitly set.
 //
@@ -70,6 +80,9 @@ func Load(moduleName string) *Config {
 		http: HTTPConfig{
 			Addr: envOr("HTTP_ADDR", ":8080"),
 		},
+		logger: LoggerConfig{
+			Format: envOr("LOG_FORMAT", "text"),
+		},
 	}
 }
 
@@ -81,6 +94,11 @@ func (c *Config) Service() ServiceConfig {
 // HTTP returns HTTP server configuration.
 func (c *Config) HTTP() HTTPConfig {
 	return c.http
+}
+
+// Logger returns logger configuration.
+func (c *Config) Logger() LoggerConfig {
+	return c.logger
 }
 
 // envOr returns the value of the environment variable named by the key, or
