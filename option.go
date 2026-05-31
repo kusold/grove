@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/kusold/grove/config"
+	"github.com/kusold/grove/lifecycle"
 )
 
 // Option configures a Grove app during construction. Options are applied in
@@ -112,6 +113,7 @@ func (b *builder) buildApp() *App {
 		capabilities: b.capabilitySet(),
 		cfg:          cfg,
 		logger:       newLogger(b.name, cfg, os.Stdout),
+		lifecycle:    lifecycle.New(),
 	}
 }
 
