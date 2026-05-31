@@ -111,18 +111,20 @@ func (b *builder) buildApp() *App {
 		name:         b.name,
 		capabilities: b.capabilitySet(),
 		cfg:          cfg,
-		logger:       newLogger(cfg, os.Stdout),
+		logger:       newLogger(b.name, cfg, os.Stdout),
 	}
 }
 
 // newLogger creates a slog.Logger configured with structured attributes for
-// service identity. The handler format is determined by cfg.Logger().Format.
-// When using text format, ANSI color codes are applied to level tags based on
-// cfg.Logger().Color.
-func newLogger(cfg config.Provider, w io.Writer) *slog.Logger {
+// service identity. serviceName is the stable module identity; runtime service
+// naming overrides remain available through config.Service().Name.
+//
+// The handler format is determined by cfg.Logger().Format. When using text
+// format, ANSI color codes are applied to level tags based on cfg.Logger().Color.
+func newLogger(serviceName string, cfg config.Provider, w io.Writer) *slog.Logger {
 	svc := cfg.Service()
 	attrs := []slog.Attr{
-		slog.String("service", svc.Name),
+		slog.String("service", serviceName),
 		slog.String("environment", svc.Environment),
 		slog.String("version", svc.Version),
 	}
@@ -199,53 +201,107 @@ func (w *colorLevelWriter) Write(p []byte) (int, error) {
 }
 
 func colorLevels(p []byte) []byte {
-	out := p
-	for _, rule := range levelColorRules {
-		colored := []byte(rule.color + string(rule.level) + colorReset)
-		out = colorLevel(out, rule.level, colored)
+	var out []byte
+	last := 0
+
+	for lineStart := 0; lineStart < len(p); {
+		lineEnd := bytes.IndexByte(p[lineStart:], '\n')
+		if lineEnd < 0 {
+			lineEnd = len(p)
+		} else {
+			lineEnd += lineStart
+		}
+
+		line, changed := colorLineLevel(p[lineStart:lineEnd])
+		if changed {
+			if out == nil {
+				out = make([]byte, 0, len(p)+len(colorReset)+5)
+			}
+			out = append(out, p[last:lineStart]...)
+			out = append(out, line...)
+			last = lineEnd
+		}
+
+		if lineEnd == len(p) {
+			break
+		}
+		lineStart = lineEnd + 1
 	}
+
+	if out == nil {
+		return p
+	}
+	out = append(out, p[last:]...)
 	return out
 }
 
-func colorLevel(p, target, colored []byte) []byte {
-	var out []byte
-	last := 0
-	start := 0
-
-	for {
-		idx := bytes.Index(p[start:], target)
-		if idx < 0 {
-			if out == nil {
-				return p
+func colorLineLevel(line []byte) ([]byte, bool) {
+	for tokenStart := 0; tokenStart < len(line); {
+		for tokenStart < len(line) && line[tokenStart] == ' ' {
+			tokenStart++
+		}
+		tokenEnd := findTokenEnd(line, tokenStart)
+		token := line[tokenStart:tokenEnd]
+		if level, ok := bytes.CutPrefix(token, []byte("level=")); ok {
+			color := colorForLevel(level)
+			if color == "" {
+				return line, false
 			}
-			out = append(out, p[last:]...)
-			return out
-		}
-		idx += start
 
-		start = idx + len(target)
-		if !isLevelToken(p, idx, len(target)) {
-			continue
+			out := make([]byte, 0, len(line)+len(color)+len(colorReset))
+			out = append(out, line[:tokenStart]...)
+			out = append(out, color...)
+			out = append(out, token...)
+			out = append(out, colorReset...)
+			out = append(out, line[tokenEnd:]...)
+			return out, true
 		}
-
-		if out == nil {
-			out = make([]byte, 0, len(p)+len(colored)-len(target))
-		}
-		out = append(out, p[last:idx]...)
-		out = append(out, colored...)
-		last = start
+		tokenStart = tokenEnd
 	}
+	return line, false
 }
 
-// isLevelToken checks that the match at idx is a standalone token: preceded
-// by space (or start of line) and followed by space, newline, or end of line.
-// This avoids coloring level= inside quoted attribute values.
-func isLevelToken(p []byte, idx, length int) bool {
-	if idx > 0 && p[idx-1] != ' ' {
+func findTokenEnd(line []byte, tokenStart int) int {
+	inQuote := false
+	escaped := false
+	for i := tokenStart; i < len(line); i++ {
+		switch c := line[i]; {
+		case escaped:
+			escaped = false
+		case c == '\\':
+			escaped = inQuote
+		case c == '"':
+			inQuote = !inQuote
+		case c == ' ' && !inQuote:
+			return i
+		}
+	}
+	return len(line)
+}
+
+func colorForLevel(level []byte) string {
+	for _, rule := range levelColorRules {
+		levelName := bytes.TrimPrefix(rule.level, []byte("level="))
+		if bytes.Equal(level, levelName) {
+			return rule.color
+		}
+		if bytes.HasPrefix(level, levelName) && isLevelDelta(level[len(levelName):]) {
+			return rule.color
+		}
+	}
+	return ""
+}
+
+func isLevelDelta(suffix []byte) bool {
+	if len(suffix) <= 1 || (suffix[0] != '+' && suffix[0] != '-') {
 		return false
 	}
-	end := idx + length
-	return end == len(p) || p[end] == ' ' || p[end] == '\n'
+	for _, c := range suffix[1:] {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (b *builder) capabilitySet() map[capability]bool {
