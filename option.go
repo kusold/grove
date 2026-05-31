@@ -1,6 +1,7 @@
 package grove
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"log/slog"
@@ -116,6 +117,8 @@ func (b *builder) buildApp() *App {
 
 // newLogger creates a slog.Logger configured with structured attributes for
 // service identity. The handler format is determined by cfg.Logger().Format.
+// When using text format, ANSI color codes are applied to level tags based on
+// cfg.Logger().Color.
 func newLogger(cfg config.Provider, w io.Writer) *slog.Logger {
 	svc := cfg.Service()
 	attrs := []slog.Attr{
@@ -126,16 +129,123 @@ func newLogger(cfg config.Provider, w io.Writer) *slog.Logger {
 
 	var handler slog.Handler
 	opts := &slog.HandlerOptions{AddSource: false}
+	logCfg := cfg.Logger()
 
-	switch cfg.Logger().Format {
+	switch logCfg.Format {
 	case "json":
 		handler = slog.NewJSONHandler(w, opts)
 	default:
+		if shouldColorize(logCfg.Color, w) {
+			w = &colorLevelWriter{writer: w}
+		}
 		handler = slog.NewTextHandler(w, opts)
 	}
 
 	handler = handler.WithAttrs(attrs)
 	return slog.New(handler)
+}
+
+// shouldColorize determines whether log output should be colorized based on
+// the config value and whether the writer is a terminal.
+//   - "on": always colorize
+//   - "off": never colorize
+//   - "auto" (default): colorize only when the writer is a character device
+func shouldColorize(colorCfg string, w io.Writer) bool {
+	switch colorCfg {
+	case "on":
+		return true
+	case "off":
+		return false
+	default: // "auto"
+		f, ok := w.(*os.File)
+		if !ok {
+			return false
+		}
+		fi, err := f.Stat()
+		if err != nil {
+			return false
+		}
+		return fi.Mode()&os.ModeCharDevice != 0
+	}
+}
+
+const colorReset = "\x1b[0m"
+
+// levelColorRules maps slog levels to ANSI color codes.
+var levelColorRules = []struct {
+	level []byte
+	color string
+}{
+	{level: []byte("level=" + slog.LevelError.String()), color: "\x1b[31m"},
+	{level: []byte("level=" + slog.LevelWarn.String()), color: "\x1b[33m"},
+	{level: []byte("level=" + slog.LevelInfo.String()), color: "\x1b[32m"},
+	{level: []byte("level=" + slog.LevelDebug.String()), color: "\x1b[34m"},
+}
+
+// colorLevelWriter wraps an io.Writer and injects ANSI color codes around
+// slog level fields in text output. It only colors the actual level= token,
+// not occurrences that appear inside quoted attribute values.
+type colorLevelWriter struct {
+	writer io.Writer
+}
+
+func (w *colorLevelWriter) Write(p []byte) (int, error) {
+	colored := colorLevels(p)
+	_, err := w.writer.Write(colored)
+	if err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+func colorLevels(p []byte) []byte {
+	out := p
+	for _, rule := range levelColorRules {
+		colored := []byte(rule.color + string(rule.level) + colorReset)
+		out = colorLevel(out, rule.level, colored)
+	}
+	return out
+}
+
+func colorLevel(p, target, colored []byte) []byte {
+	var out []byte
+	last := 0
+	start := 0
+
+	for {
+		idx := bytes.Index(p[start:], target)
+		if idx < 0 {
+			if out == nil {
+				return p
+			}
+			out = append(out, p[last:]...)
+			return out
+		}
+		idx += start
+
+		start = idx + len(target)
+		if !isLevelToken(p, idx, len(target)) {
+			continue
+		}
+
+		if out == nil {
+			out = make([]byte, 0, len(p)+len(colored)-len(target))
+		}
+		out = append(out, p[last:idx]...)
+		out = append(out, colored...)
+		last = start
+	}
+}
+
+// isLevelToken checks that the match at idx is a standalone token: preceded
+// by space (or start of line) and followed by space, newline, or end of line.
+// This avoids coloring level= inside quoted attribute values.
+func isLevelToken(p []byte, idx, length int) bool {
+	if idx > 0 && p[idx-1] != ' ' {
+		return false
+	}
+	end := idx + length
+	return end == len(p) || p[end] == ' ' || p[end] == '\n'
 }
 
 func (b *builder) capabilitySet() map[capability]bool {

@@ -9,6 +9,7 @@
 //	SERVICE_VERSION  — service version string (default: "dev")
 //	HTTP_ADDR        — listen address for the HTTP server (default: ":8080")
 //	LOG_FORMAT       — log output format: "text" or "json" (default: "text")
+//	LOG_COLOR        — colorize text output: "on", "off", or "auto" (default: "auto")
 //
 // If both Module.Name() and SERVICE_NAME are set, SERVICE_NAME overrides the
 // runtime config but does not change module identity. This distinction is
@@ -63,6 +64,12 @@ type LoggerConfig struct {
 	// Format controls the log output format. Valid values are "text" and "json".
 	// Defaults to "text".
 	Format string
+
+	// Color controls ANSI colorization of text log output. Valid values are
+	// "on" (always colorize), "off" (never colorize), and "auto" (colorize only
+	// when output is a terminal). Defaults to "auto". Colorization is only
+	// applied when Format is "text".
+	Color string
 }
 
 // Load reads configuration from environment variables. It applies sensible
@@ -82,6 +89,7 @@ func Load(moduleName string) *Config {
 		},
 		logger: LoggerConfig{
 			Format: envOr("LOG_FORMAT", "text"),
+			Color:  envOr("LOG_COLOR", "auto"),
 		},
 	}
 }

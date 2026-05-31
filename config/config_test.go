@@ -4,7 +4,7 @@ import "testing"
 
 func clearConfigEnv(t *testing.T) {
 	t.Helper()
-	for _, key := range []string{"SERVICE_NAME", "SERVICE_ENV", "SERVICE_VERSION", "HTTP_ADDR", "LOG_FORMAT"} {
+	for _, key := range []string{"SERVICE_NAME", "SERVICE_ENV", "SERVICE_VERSION", "HTTP_ADDR", "LOG_FORMAT", "LOG_COLOR"} {
 		t.Setenv(key, "")
 	}
 }
@@ -130,6 +130,38 @@ func TestLoggerConfig(t *testing.T) {
 		cfg := Load("test")
 		if cfg.Logger().Format != "text" {
 			t.Errorf("Logger.Format = %q, want %q when env var is empty", cfg.Logger().Format, "text")
+		}
+	})
+
+	t.Run("default log color is auto", func(t *testing.T) {
+		clearConfigEnv(t)
+		cfg := Load("test")
+		if cfg.Logger().Color != "auto" {
+			t.Errorf("Logger.Color = %q, want %q", cfg.Logger().Color, "auto")
+		}
+	})
+
+	t.Run("LOG_COLOR=on overrides default", func(t *testing.T) {
+		t.Setenv("LOG_COLOR", "on")
+		cfg := Load("test")
+		if cfg.Logger().Color != "on" {
+			t.Errorf("Logger.Color = %q, want %q", cfg.Logger().Color, "on")
+		}
+	})
+
+	t.Run("LOG_COLOR=off overrides default", func(t *testing.T) {
+		t.Setenv("LOG_COLOR", "off")
+		cfg := Load("test")
+		if cfg.Logger().Color != "off" {
+			t.Errorf("Logger.Color = %q, want %q", cfg.Logger().Color, "off")
+		}
+	})
+
+	t.Run("empty LOG_COLOR is treated as unset", func(t *testing.T) {
+		t.Setenv("LOG_COLOR", "")
+		cfg := Load("test")
+		if cfg.Logger().Color != "auto" {
+			t.Errorf("Logger.Color = %q, want %q when env var is empty", cfg.Logger().Color, "auto")
 		}
 	})
 }
