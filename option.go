@@ -1,6 +1,10 @@
 package grove
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/kusold/grove/config"
+)
 
 // Option configures a Grove app during construction. Options are applied in
 // order before module registration runs. An Option may return an error if its
@@ -101,6 +105,7 @@ func (b *builder) buildApp() *App {
 	return &App{
 		name:         b.name,
 		capabilities: b.capabilitySet(),
+		cfg:          config.Load(b.name),
 	}
 }
 

@@ -1,6 +1,10 @@
 package grove
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/kusold/grove/config"
+)
 
 // App is the central runtime object for a Grove service. It holds private state
 // and exposes public methods for registering capabilities during module
@@ -8,11 +12,19 @@ import "fmt"
 type App struct {
 	name         string
 	capabilities map[capability]bool
+	cfg          *config.Config
 }
 
 // Name returns the service name, derived from Module.Name().
 func (a *App) Name() string {
 	return a.name
+}
+
+// Config returns the service configuration loaded from environment variables.
+// The config is loaded during app construction and is available for the
+// entire lifetime of the service.
+func (a *App) Config() *config.Config {
+	return a.cfg
 }
 
 // hasCapability reports whether a capability is enabled.
