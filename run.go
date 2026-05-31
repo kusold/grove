@@ -23,14 +23,22 @@ func Main(module Module, opts ...Option) {
 	}
 }
 
-// Run creates the App, applies options, and registers the module. It returns
-// an error if module registration fails. Run does not call os.Exit, making it
-// suitable for testing and programmatic use.
+// Run creates the App, applies options, validates capability dependencies,
+// and registers the module. It returns an error if any option fails, dependency
+// validation fails, or module registration fails. Run does not call os.Exit,
+// making it suitable for testing and programmatic use.
 //
 // The HTTP server is not started until after module registration completes
 // successfully.
 func Run(ctx context.Context, module Module, opts ...Option) error {
-	app := newApp(module.Name(), opts...)
+	app, err := newApp(module.Name(), opts...)
+	if err != nil {
+		return fmt.Errorf("option error: %w", err)
+	}
+
+	if err := app.validateCapabilities(); err != nil {
+		return err
+	}
 
 	if err := module.Register(ctx, app); err != nil {
 		return fmt.Errorf("module %q registration failed: %w", module.Name(), err)
