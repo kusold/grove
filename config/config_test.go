@@ -4,7 +4,7 @@ import "testing"
 
 func clearConfigEnv(t *testing.T) {
 	t.Helper()
-	for _, key := range []string{"SERVICE_NAME", "SERVICE_ENV", "SERVICE_VERSION", "HTTP_ADDR"} {
+	for _, key := range []string{"SERVICE_NAME", "SERVICE_ENV", "SERVICE_VERSION", "HTTP_ADDR", "LOG_FORMAT"} {
 		t.Setenv(key, "")
 	}
 }
@@ -87,6 +87,7 @@ func TestLoad(t *testing.T) {
 		t.Setenv("SERVICE_ENV", "staging")
 		t.Setenv("SERVICE_VERSION", "v2.0.0")
 		t.Setenv("HTTP_ADDR", ":3000")
+		t.Setenv("LOG_FORMAT", "json")
 
 		cfg := Load("unused-module-name")
 		if cfg.Service().Name != "my-service" {
@@ -100,6 +101,35 @@ func TestLoad(t *testing.T) {
 		}
 		if cfg.HTTP().Addr != ":3000" {
 			t.Errorf("HTTP.Addr = %q, want %q", cfg.HTTP().Addr, ":3000")
+		}
+		if cfg.Logger().Format != "json" {
+			t.Errorf("Logger.Format = %q, want %q", cfg.Logger().Format, "json")
+		}
+	})
+}
+
+func TestLoggerConfig(t *testing.T) {
+	t.Run("default log format is text", func(t *testing.T) {
+		clearConfigEnv(t)
+		cfg := Load("test")
+		if cfg.Logger().Format != "text" {
+			t.Errorf("Logger.Format = %q, want %q", cfg.Logger().Format, "text")
+		}
+	})
+
+	t.Run("LOG_FORMAT=json overrides default", func(t *testing.T) {
+		t.Setenv("LOG_FORMAT", "json")
+		cfg := Load("test")
+		if cfg.Logger().Format != "json" {
+			t.Errorf("Logger.Format = %q, want %q", cfg.Logger().Format, "json")
+		}
+	})
+
+	t.Run("empty LOG_FORMAT is treated as unset", func(t *testing.T) {
+		t.Setenv("LOG_FORMAT", "")
+		cfg := Load("test")
+		if cfg.Logger().Format != "text" {
+			t.Errorf("Logger.Format = %q, want %q when env var is empty", cfg.Logger().Format, "text")
 		}
 	})
 }
