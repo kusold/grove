@@ -37,6 +37,11 @@ type checkResult struct {
 	Error  string `json:"error,omitempty"`
 }
 
+type checkResponse struct {
+	Status string        `json:"status"`
+	Checks []checkResult `json:"checks,omitempty"`
+}
+
 // Registry manages separate lists of health (liveness) and readiness checks.
 // Both lists are safe to append from multiple goroutines.
 type Registry struct {
@@ -140,13 +145,13 @@ func (r *Registry) ReadyzHandler() http.HandlerFunc {
 func (r *Registry) serveCheck(w http.ResponseWriter, req *http.Request, checks []Check, failStatus string) {
 	results, err := runChecksWithResults(req.Context(), checks)
 	if err == nil {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		writeJSON(w, http.StatusOK, checkResponse{Status: "ok"})
 		return
 	}
 
-	writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-		"status": failStatus,
-		"checks": results,
+	writeJSON(w, http.StatusServiceUnavailable, checkResponse{
+		Status: failStatus,
+		Checks: results,
 	})
 }
 
