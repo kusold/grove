@@ -22,6 +22,13 @@ func (m testModule) Register(ctx context.Context, app *App) error {
 	return nil
 }
 
+func clearConfigEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{"SERVICE_NAME", "SERVICE_ENV", "SERVICE_VERSION", "HTTP_ADDR"} {
+		t.Setenv(key, "")
+	}
+}
+
 func TestModuleInterface(t *testing.T) {
 	t.Run("Name returns the module name", func(t *testing.T) {
 		m := testModule{name: "test-service"}
@@ -225,6 +232,7 @@ func TestApp(t *testing.T) {
 	})
 
 	t.Run("Config uses module name as default service name", func(t *testing.T) {
+		clearConfigEnv(t)
 		app, err := newApp("my-service")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -236,6 +244,7 @@ func TestApp(t *testing.T) {
 	})
 
 	t.Run("Config applies environment defaults", func(t *testing.T) {
+		clearConfigEnv(t)
 		app, err := newApp("test")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
