@@ -2,6 +2,9 @@ package grove
 
 import (
 	"fmt"
+	"io"
+	"log/slog"
+	"os"
 
 	"github.com/kusold/grove/config"
 )
@@ -102,11 +105,37 @@ func (b *builder) validateCapabilities() error {
 }
 
 func (b *builder) buildApp() *App {
+	cfg := config.Load(b.name)
 	return &App{
 		name:         b.name,
 		capabilities: b.capabilitySet(),
-		cfg:          config.Load(b.name),
+		cfg:          cfg,
+		logger:       newLogger(cfg, os.Stdout),
 	}
+}
+
+// newLogger creates a slog.Logger configured with structured attributes for
+// service identity. It uses a JSON handler in production and a text handler
+// in all other environments.
+func newLogger(cfg config.Provider, w io.Writer) *slog.Logger {
+	svc := cfg.Service()
+	attrs := []slog.Attr{
+		slog.String("service", svc.Name),
+		slog.String("environment", svc.Environment),
+		slog.String("version", svc.Version),
+	}
+
+	var handler slog.Handler
+	opts := &slog.HandlerOptions{AddSource: false}
+
+	if svc.Environment == "production" {
+		handler = slog.NewJSONHandler(w, opts)
+	} else {
+		handler = slog.NewTextHandler(w, opts)
+	}
+
+	handler = handler.WithAttrs(attrs)
+	return slog.New(handler)
 }
 
 func (b *builder) capabilitySet() map[capability]bool {

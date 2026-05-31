@@ -1,10 +1,14 @@
 package grove
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/kusold/grove/config"
 )
 
 // testModule is a minimal Module implementation for testing.
@@ -459,6 +463,68 @@ func TestRequireCapability(t *testing.T) {
 		}
 		if err := app.requireCapability(capHTTP); err != nil {
 			t.Errorf("expected nil error when capability is enabled, got: %v", err)
+		}
+	})
+}
+
+func TestAppLogger(t *testing.T) {
+	t.Run("Logger returns non-nil slog.Logger", func(t *testing.T) {
+		clearConfigEnv(t)
+		app, err := newApp("test-svc")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if app.Logger() == nil {
+			t.Fatal("app.Logger() returned nil")
+		}
+	})
+
+	t.Run("Logger uses text handler in development", func(t *testing.T) {
+		clearConfigEnv(t)
+
+		var buf bytes.Buffer
+		cfg := config.Load("dev-svc")
+		logger := newLogger(cfg, &buf)
+		logger.Info("test message")
+
+		output := buf.String()
+		// Text handler output is not JSON
+		if strings.HasPrefix(output, "{") {
+			t.Error("expected text output in development, got JSON")
+		}
+		if !strings.Contains(output, "service=dev-svc") {
+			t.Errorf("output should contain service attribute, got: %s", output)
+		}
+		if !strings.Contains(output, "environment=development") {
+			t.Errorf("output should contain environment attribute, got: %s", output)
+		}
+		if !strings.Contains(output, "version=dev") {
+			t.Errorf("output should contain version attribute, got: %s", output)
+		}
+	})
+
+	t.Run("Logger uses JSON handler in production", func(t *testing.T) {
+		clearConfigEnv(t)
+		t.Setenv("SERVICE_ENV", "production")
+		t.Setenv("SERVICE_VERSION", "v1.0.0")
+
+		var buf bytes.Buffer
+		cfg := config.Load("prod-svc")
+		logger := newLogger(cfg, &buf)
+		logger.Info("test message")
+
+		var record map[string]any
+		if err := json.Unmarshal([]byte(buf.String()), &record); err != nil {
+			t.Fatalf("output should be valid JSON in production: %v, got: %s", err, buf.String())
+		}
+		if record["service"] != "prod-svc" {
+			t.Errorf("service = %v, want %q", record["service"], "prod-svc")
+		}
+		if record["environment"] != "production" {
+			t.Errorf("environment = %v, want %q", record["environment"], "production")
+		}
+		if record["version"] != "v1.0.0" {
+			t.Errorf("version = %v, want %q", record["version"], "v1.0.0")
 		}
 	})
 }

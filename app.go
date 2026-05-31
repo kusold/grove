@@ -2,6 +2,7 @@ package grove
 
 import (
 	"fmt"
+	"log/slog"
 
 	"github.com/kusold/grove/config"
 )
@@ -13,6 +14,7 @@ type App struct {
 	name         string
 	capabilities map[capability]bool
 	cfg          config.Provider
+	logger       *slog.Logger
 }
 
 // Name returns the service name, derived from Module.Name().
@@ -25,6 +27,14 @@ func (a *App) Name() string {
 // entire lifetime of the service.
 func (a *App) Config() config.Provider {
 	return a.cfg
+}
+
+// Logger returns the configured structured logger for the service. The logger
+// includes service name, environment, and version as default attributes. In
+// production, output is JSON. In all other environments, output is human-readable
+// text.
+func (a *App) Logger() *slog.Logger {
+	return a.logger
 }
 
 // hasCapability reports whether a capability is enabled.
