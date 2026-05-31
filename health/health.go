@@ -140,20 +140,20 @@ func (r *Registry) ReadyzHandler() http.HandlerFunc {
 func (r *Registry) serveCheck(w http.ResponseWriter, req *http.Request, checks []Check, failStatus string) {
 	results, err := runChecksWithResults(req.Context(), checks)
 	if err == nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"}); err != nil {
-			return
-		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusServiceUnavailable)
-	if err := json.NewEncoder(w).Encode(map[string]any{
+	writeJSON(w, http.StatusServiceUnavailable, map[string]any{
 		"status": failStatus,
 		"checks": results,
-	}); err != nil {
+	})
+}
+
+func writeJSON(w http.ResponseWriter, statusCode int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	if err := json.NewEncoder(w).Encode(body); err != nil {
 		return
 	}
 }
