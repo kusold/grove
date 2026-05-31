@@ -2,8 +2,16 @@ package config
 
 import "testing"
 
+func clearConfigEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{"SERVICE_NAME", "SERVICE_ENV", "SERVICE_VERSION", "HTTP_ADDR"} {
+		t.Setenv(key, "")
+	}
+}
+
 func TestLoad(t *testing.T) {
 	t.Run("uses module name as default service name", func(t *testing.T) {
+		clearConfigEnv(t)
 		cfg := Load("canopy")
 		if cfg.Service().Name != "canopy" {
 			t.Errorf("Service.Name = %q, want %q", cfg.Service().Name, "canopy")
@@ -19,6 +27,7 @@ func TestLoad(t *testing.T) {
 	})
 
 	t.Run("default environment is development", func(t *testing.T) {
+		clearConfigEnv(t)
 		cfg := Load("test")
 		if cfg.Service().Environment != "development" {
 			t.Errorf("Service.Environment = %q, want %q", cfg.Service().Environment, "development")
@@ -34,6 +43,7 @@ func TestLoad(t *testing.T) {
 	})
 
 	t.Run("default version is dev", func(t *testing.T) {
+		clearConfigEnv(t)
 		cfg := Load("test")
 		if cfg.Service().Version != "dev" {
 			t.Errorf("Service.Version = %q, want %q", cfg.Service().Version, "dev")
@@ -49,6 +59,7 @@ func TestLoad(t *testing.T) {
 	})
 
 	t.Run("default HTTP addr is :8080", func(t *testing.T) {
+		clearConfigEnv(t)
 		cfg := Load("test")
 		if cfg.HTTP().Addr != ":8080" {
 			t.Errorf("HTTP.Addr = %q, want %q", cfg.HTTP().Addr, ":8080")
@@ -117,6 +128,7 @@ func TestEnvOr(t *testing.T) {
 
 func TestLoadDoesNotReadAllEnvVars(t *testing.T) {
 	t.Run("only reads specific known variables", func(t *testing.T) {
+		clearConfigEnv(t)
 		// Ensure that adding random env vars doesn't affect Load
 		t.Setenv("RANDOM_VAR_12345", "should-be-ignored")
 		cfg := Load("test")
