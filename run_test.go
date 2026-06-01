@@ -170,9 +170,9 @@ func TestRun(t *testing.T) {
 
 func TestNewApp(t *testing.T) {
 	t.Run("sets name from argument", func(t *testing.T) {
-		app, err := newApp("test-app")
+		app, err := NewApp("test-app")
 		if err != nil {
-			t.Fatalf("newApp() returned unexpected error: %v", err)
+			t.Fatalf("NewApp() returned unexpected error: %v", err)
 		}
 		if got := app.Name(); got != "test-app" {
 			t.Errorf("app.Name() = %q, want %q", got, "test-app")
@@ -184,9 +184,9 @@ func TestNewApp(t *testing.T) {
 		opt1 := func(b *builder) error { order = append(order, "opt1"); return nil }
 		opt2 := func(b *builder) error { order = append(order, "opt2"); return nil }
 
-		_, err := newApp("test", opt1, opt2)
+		_, err := NewApp("test", opt1, opt2)
 		if err != nil {
-			t.Fatalf("newApp() returned unexpected error: %v", err)
+			t.Fatalf("NewApp() returned unexpected error: %v", err)
 		}
 
 		if len(order) != 2 || order[0] != "opt1" || order[1] != "opt2" {
@@ -195,12 +195,12 @@ func TestNewApp(t *testing.T) {
 	})
 
 	t.Run("returns non-nil app with no options", func(t *testing.T) {
-		app, err := newApp("bare")
+		app, err := NewApp("bare")
 		if err != nil {
-			t.Fatalf("newApp() returned unexpected error: %v", err)
+			t.Fatalf("NewApp() returned unexpected error: %v", err)
 		}
 		if app == nil {
-			t.Error("newApp() returned nil")
+			t.Error("NewApp() returned nil")
 		}
 	})
 
@@ -211,12 +211,12 @@ func TestNewApp(t *testing.T) {
 		opt2 := func(b *builder) error { return optErr }
 		opt3 := func(b *builder) error { applied = append(applied, "opt3"); return nil }
 
-		_, err := newApp("test", opt1, opt2, opt3)
+		_, err := NewApp("test", opt1, opt2, opt3)
 		if err == nil {
-			t.Fatal("newApp() should return an error")
+			t.Fatal("NewApp() should return an error")
 		}
 		if !errors.Is(err, optErr) {
-			t.Errorf("newApp() error = %v, want to wrap %v", err, optErr)
+			t.Errorf("NewApp() error = %v, want to wrap %v", err, optErr)
 		}
 		if len(applied) != 1 || applied[0] != "opt1" {
 			t.Errorf("expected only opt1 applied, got %v", applied)
@@ -226,14 +226,14 @@ func TestNewApp(t *testing.T) {
 
 func TestApp(t *testing.T) {
 	t.Run("Name returns the app name", func(t *testing.T) {
-		app, _ := newApp("svc-name")
+		app, _ := NewApp("svc-name")
 		if got := app.Name(); got != "svc-name" {
 			t.Errorf("app.Name() = %q, want %q", got, "svc-name")
 		}
 	})
 
 	t.Run("Config returns non-nil config", func(t *testing.T) {
-		app, err := newApp("test-svc")
+		app, err := NewApp("test-svc")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -245,7 +245,7 @@ func TestApp(t *testing.T) {
 
 	t.Run("Config uses module name as default service name", func(t *testing.T) {
 		clearConfigEnv(t)
-		app, err := newApp("my-service")
+		app, err := NewApp("my-service")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -257,7 +257,7 @@ func TestApp(t *testing.T) {
 
 	t.Run("Config applies environment defaults", func(t *testing.T) {
 		clearConfigEnv(t)
-		app, err := newApp("test")
+		app, err := NewApp("test")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -275,7 +275,7 @@ func TestApp(t *testing.T) {
 
 	t.Run("Config SERVICE_NAME overrides module name", func(t *testing.T) {
 		t.Setenv("SERVICE_NAME", "overridden")
-		app, err := newApp("module-name")
+		app, err := NewApp("module-name")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -292,7 +292,7 @@ func TestApp(t *testing.T) {
 
 func TestCapabilityOptions(t *testing.T) {
 	t.Run("WithHTTP enables http capability", func(t *testing.T) {
-		app, err := newApp("test", WithHTTP())
+		app, err := NewApp("test", WithHTTP())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -302,7 +302,7 @@ func TestCapabilityOptions(t *testing.T) {
 	})
 
 	t.Run("options are idempotent", func(t *testing.T) {
-		app, err := newApp("test", WithHTTP(), WithHTTP())
+		app, err := NewApp("test", WithHTTP(), WithHTTP())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -464,7 +464,7 @@ func TestCapabilityDeterministicOrder(t *testing.T) {
 
 func TestAppLifecycle(t *testing.T) {
 	t.Run("Lifecycle returns non-nil manager", func(t *testing.T) {
-		app, err := newApp("test-svc")
+		app, err := NewApp("test-svc")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -475,7 +475,7 @@ func TestAppLifecycle(t *testing.T) {
 	})
 
 	t.Run("Lifecycle returns same manager on each call", func(t *testing.T) {
-		app, err := newApp("test-svc")
+		app, err := NewApp("test-svc")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -517,7 +517,7 @@ func TestAppLifecycle(t *testing.T) {
 			},
 		}
 
-		app, err := newApp(m.Name())
+		app, err := NewApp(m.Name())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -546,7 +546,7 @@ func TestAppLifecycle(t *testing.T) {
 
 func TestAppHTTP(t *testing.T) {
 	t.Run("HTTP returns registry when WithHTTP is enabled", func(t *testing.T) {
-		app, err := newApp("test", WithHTTP())
+		app, err := NewApp("test", WithHTTP())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -557,7 +557,7 @@ func TestAppHTTP(t *testing.T) {
 	})
 
 	t.Run("HTTP returns same registry on each call", func(t *testing.T) {
-		app, err := newApp("test", WithHTTP())
+		app, err := NewApp("test", WithHTTP())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -569,7 +569,7 @@ func TestAppHTTP(t *testing.T) {
 	})
 
 	t.Run("HTTP panics when capability not enabled", func(t *testing.T) {
-		app, err := newApp("test")
+		app, err := NewApp("test")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -595,7 +595,7 @@ func TestAppHTTP(t *testing.T) {
 	})
 
 	t.Run("registry routes work through app", func(t *testing.T) {
-		app, err := newApp("test", WithHTTP())
+		app, err := NewApp("test", WithHTTP())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -621,7 +621,7 @@ func TestAppHTTP(t *testing.T) {
 
 func TestRequireCapability(t *testing.T) {
 	t.Run("returns error when capability not enabled", func(t *testing.T) {
-		app, err := newApp("test")
+		app, err := NewApp("test")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -638,7 +638,7 @@ func TestRequireCapability(t *testing.T) {
 	})
 
 	t.Run("returns nil when capability is enabled", func(t *testing.T) {
-		app, err := newApp("test", WithHTTP())
+		app, err := NewApp("test", WithHTTP())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -651,7 +651,7 @@ func TestRequireCapability(t *testing.T) {
 func TestAppLogger(t *testing.T) {
 	t.Run("Logger returns non-nil slog.Logger", func(t *testing.T) {
 		clearConfigEnv(t)
-		app, err := newApp("test-svc")
+		app, err := NewApp("test-svc")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

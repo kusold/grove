@@ -41,7 +41,7 @@ func Main(module Module, opts ...Option) {
 // Run does not call os.Exit, making it suitable for testing and programmatic
 // use.
 func Run(ctx context.Context, module Module, opts ...Option) error {
-	app, err := newApp(module.Name(), opts...)
+	app, err := NewApp(module.Name(), opts...)
 	if err != nil {
 		return fmt.Errorf("option error: %w", err)
 	}
