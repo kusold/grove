@@ -80,6 +80,9 @@ func Run(ctx context.Context, module Module, opts ...Option) error {
 
 	select {
 	case <-sigCtx.Done():
+		// Restore default signal behavior before shutdown work so a second
+		// SIGINT/SIGTERM can interrupt a stalled graceful stop.
+		stop()
 		app.Logger().Info("shutdown signal received")
 	case err := <-serverErr:
 		if err != nil {
