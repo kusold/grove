@@ -1319,8 +1319,8 @@ func TestRun_GracefulShutdown(t *testing.T) {
 func TestRun_HTTPServer_ServesRoutes(t *testing.T) {
 	t.Run("healthz and readyz are served on running server", func(t *testing.T) {
 		clearConfigEnv(t)
-		// Use a specific available port
-		t.Setenv("HTTP_ADDR", "127.0.0.1:18080")
+		addr := unusedTCPAddr(t)
+		t.Setenv("HTTP_ADDR", addr)
 		t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "5s")
 
 		m := testModule{
@@ -1340,7 +1340,7 @@ func TestRun_HTTPServer_ServesRoutes(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 
 		// Test healthz
-		resp, err := http.Get("http://127.0.0.1:18080/healthz")
+		resp, err := http.Get("http://" + addr + "/healthz")
 		if err != nil {
 			t.Fatalf("failed to GET /healthz: %v", err)
 		}
@@ -1350,7 +1350,7 @@ func TestRun_HTTPServer_ServesRoutes(t *testing.T) {
 		}
 
 		// Test readyz
-		resp, err = http.Get("http://127.0.0.1:18080/readyz")
+		resp, err = http.Get("http://" + addr + "/readyz")
 		if err != nil {
 			t.Fatalf("failed to GET /readyz: %v", err)
 		}
@@ -1373,7 +1373,8 @@ func TestRun_HTTPServer_ServesRoutes(t *testing.T) {
 
 	t.Run("custom routes are served", func(t *testing.T) {
 		clearConfigEnv(t)
-		t.Setenv("HTTP_ADDR", "127.0.0.1:18081")
+		addr := unusedTCPAddr(t)
+		t.Setenv("HTTP_ADDR", addr)
 		t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "5s")
 
 		m := testModule{
@@ -1396,7 +1397,7 @@ func TestRun_HTTPServer_ServesRoutes(t *testing.T) {
 
 		time.Sleep(200 * time.Millisecond)
 
-		resp, err := http.Get("http://127.0.0.1:18081/hello")
+		resp, err := http.Get("http://" + addr + "/hello")
 		if err != nil {
 			t.Fatalf("failed to GET /hello: %v", err)
 		}
@@ -1424,6 +1425,20 @@ func TestRun_HTTPServer_ServesRoutes(t *testing.T) {
 			t.Fatal("Run() did not complete within timeout")
 		}
 	})
+}
+
+func unusedTCPAddr(t *testing.T) string {
+	t.Helper()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to allocate test listener: %v", err)
+	}
+	addr := ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		t.Fatalf("failed to release test listener: %v", err)
+	}
+	return addr
 }
 
 func TestRun_NoHTTP(t *testing.T) {
