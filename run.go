@@ -62,11 +62,6 @@ func Run(ctx context.Context, module Module, opts ...Option) error {
 	reg.Get("/healthz", app.Health().HealthzHandler())
 	reg.Get("/readyz", app.Health().ReadyzHandler())
 
-	// Run lifecycle start hooks (module registration is complete).
-	if err := app.Lifecycle().Start(ctx); err != nil {
-		return fmt.Errorf("lifecycle start: %w", err)
-	}
-
 	// Configure shutdown timeout from config.
 	shutdownTimeout, err := time.ParseDuration(app.Config().HTTP().ShutdownTimeout)
 	if err != nil {
@@ -88,6 +83,11 @@ func Run(ctx context.Context, module Module, opts ...Option) error {
 		},
 	})
 
+	// Run lifecycle start hooks (module registration is complete).
+	if err := app.Lifecycle().Start(ctx); err != nil {
+		return fmt.Errorf("lifecycle start: %w", err)
+	}
+
 	// Start listening in a goroutine. ListenAndServe always returns a non-nil
 	// error; http.ErrServerClosed is expected during graceful shutdown.
 	serverErr := make(chan error, 1)
@@ -108,12 +108,15 @@ func Run(ctx context.Context, module Module, opts ...Option) error {
 		app.Logger().Info("shutdown signal received")
 	case err := <-serverErr:
 		if err != nil {
+			if stopErr := app.Lifecycle().Stop(context.WithoutCancel(ctx)); stopErr != nil {
+				return errors.Join(fmt.Errorf("http server error: %w", err), fmt.Errorf("lifecycle stop: %w", stopErr))
+			}
 			return fmt.Errorf("http server error: %w", err)
 		}
 	}
 
 	// Run lifecycle stop hooks in reverse order (includes http-server stop).
-	if err := app.Lifecycle().Stop(ctx); err != nil {
+	if err := app.Lifecycle().Stop(context.WithoutCancel(ctx)); err != nil {
 		return fmt.Errorf("lifecycle stop: %w", err)
 	}
 
