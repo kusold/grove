@@ -925,11 +925,11 @@ func TestRun_HTTPServer(t *testing.T) {
 		t.Setenv("HTTP_ADDR", "127.0.0.1:0")
 		t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "5s")
 
-		var registrationComplete bool
+		registrationComplete := make(chan struct{})
 		m := testModule{
 			name: "order-test",
 			register: func(ctx context.Context, app *App) error {
-				registrationComplete = true
+				close(registrationComplete)
 				return nil
 			},
 		}
@@ -942,11 +942,12 @@ func TestRun_HTTPServer(t *testing.T) {
 			runDone <- Run(ctx, m, WithHTTP())
 		}()
 
-		// Give server a moment to start
-		time.Sleep(100 * time.Millisecond)
-
-		if !registrationComplete {
-			t.Error("expected module registration to have completed")
+		select {
+		case <-registrationComplete:
+		case err := <-runDone:
+			t.Fatalf("Run() completed before module registration signal: %v", err)
+		case <-time.After(10 * time.Second):
+			t.Fatal("module registration did not complete")
 		}
 
 		cancel()
@@ -966,14 +967,14 @@ func TestRun_HTTPServer(t *testing.T) {
 		t.Setenv("HTTP_ADDR", "127.0.0.1:0")
 		t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "5s")
 
-		var hookRan bool
+		hookRan := make(chan struct{})
 		m := testModule{
 			name: "hook-order-test",
 			register: func(ctx context.Context, app *App) error {
 				app.Lifecycle().Append(lifecycle.Hook{
 					Name: "test-hook",
 					Start: func(ctx context.Context) error {
-						hookRan = true
+						close(hookRan)
 						return nil
 					},
 				})
@@ -989,11 +990,12 @@ func TestRun_HTTPServer(t *testing.T) {
 			runDone <- Run(ctx, m, WithHTTP())
 		}()
 
-		// Wait for the server to be up
-		time.Sleep(100 * time.Millisecond)
-
-		if !hookRan {
-			t.Error("expected lifecycle start hook to have run")
+		select {
+		case <-hookRan:
+		case err := <-runDone:
+			t.Fatalf("Run() completed before lifecycle start hook signal: %v", err)
+		case <-time.After(10 * time.Second):
+			t.Fatal("lifecycle start hook did not run")
 		}
 
 		cancel()
