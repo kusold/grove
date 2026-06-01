@@ -919,42 +919,6 @@ func TestColorLevels(t *testing.T) {
 // --- Graceful HTTP Server Tests ---
 
 func TestRun_HTTPServer(t *testing.T) {
-	t.Run("wires healthz and readyz routes", func(t *testing.T) {
-		clearConfigEnv(t)
-		t.Setenv("HTTP_ADDR", ":0") // use random port
-		t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "5s")
-
-		m := testModule{
-			name: "healthz-test",
-			register: func(ctx context.Context, app *App) error {
-				// No custom routes needed; healthz and readyz are auto-wired.
-				return nil
-			},
-		}
-
-		// We'll use a context with cancel to trigger shutdown
-		ctx, cancel := context.WithCancel(context.Background())
-
-		runDone := make(chan error, 1)
-		go func() {
-			runDone <- Run(ctx, m, WithHTTP())
-		}()
-
-		// Give the server time to start. We need to find the actual address.
-		// Since we can't easily get the bound address with :0, we use a fixed port.
-		cancel() // trigger shutdown via context cancellation
-
-		// The Run should complete after cancellation
-		select {
-		case err := <-runDone:
-			if err != nil {
-				t.Fatalf("Run() returned unexpected error: %v", err)
-			}
-		case <-time.After(10 * time.Second):
-			t.Fatal("Run() did not complete within timeout")
-		}
-	})
-
 	t.Run("starts HTTP server after module registration", func(t *testing.T) {
 		clearConfigEnv(t)
 		// Use a specific port for testing
@@ -994,20 +958,6 @@ func TestRun_HTTPServer(t *testing.T) {
 			}
 		case <-time.After(10 * time.Second):
 			t.Fatal("Run() did not complete within timeout")
-		}
-	})
-
-	t.Run("returns error for invalid shutdown timeout", func(t *testing.T) {
-		clearConfigEnv(t)
-		t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "not-a-duration")
-
-		m := testModule{name: "bad-timeout"}
-		err := Run(context.Background(), m, WithHTTP())
-		if err == nil {
-			t.Fatal("expected error for invalid shutdown timeout")
-		}
-		if !strings.Contains(err.Error(), "invalid HTTP_SHUTDOWN_TIMEOUT") {
-			t.Errorf("error = %q, want to contain 'invalid HTTP_SHUTDOWN_TIMEOUT'", err.Error())
 		}
 	})
 
@@ -1137,12 +1087,17 @@ func TestRun_GracefulShutdown(t *testing.T) {
 		t.Setenv("HTTP_ADDR", "127.0.0.1:0")
 		t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "5s")
 
+		started := make(chan struct{})
 		var stopOrder []string
 		m := testModule{
 			name: "sigint-test",
 			register: func(ctx context.Context, app *App) error {
 				app.Lifecycle().Append(lifecycle.Hook{
 					Name: "module-cleanup",
+					Start: func(ctx context.Context) error {
+						close(started)
+						return nil
+					},
 					Stop: func(ctx context.Context) error {
 						stopOrder = append(stopOrder, "module-cleanup")
 						return nil
@@ -1158,8 +1113,11 @@ func TestRun_GracefulShutdown(t *testing.T) {
 			runDone <- Run(context.Background(), m, WithHTTP())
 		}()
 
-		// Give server time to start and register signal handler
-		time.Sleep(200 * time.Millisecond)
+		select {
+		case <-started:
+		case <-time.After(10 * time.Second):
+			t.Fatal("lifecycle start hook did not run")
+		}
 
 		// Send SIGINT to ourselves
 		p, _ := os.FindProcess(os.Getpid())
@@ -1177,6 +1135,59 @@ func TestRun_GracefulShutdown(t *testing.T) {
 		// Verify lifecycle stop hooks ran
 		if len(stopOrder) != 1 || stopOrder[0] != "module-cleanup" {
 			t.Errorf("stop order = %v, want [module-cleanup]", stopOrder)
+		}
+	})
+
+	t.Run("SIGTERM triggers graceful shutdown", func(t *testing.T) {
+		clearConfigEnv(t)
+		t.Setenv("HTTP_ADDR", "127.0.0.1:0")
+		t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "5s")
+
+		started := make(chan struct{})
+		var stopCalled bool
+		m := testModule{
+			name: "sigterm-test",
+			register: func(ctx context.Context, app *App) error {
+				app.Lifecycle().Append(lifecycle.Hook{
+					Name: "module-cleanup",
+					Start: func(ctx context.Context) error {
+						close(started)
+						return nil
+					},
+					Stop: func(ctx context.Context) error {
+						stopCalled = true
+						return nil
+					},
+				})
+				return nil
+			},
+		}
+
+		runDone := make(chan error, 1)
+		go func() {
+			runDone <- Run(context.Background(), m, WithHTTP())
+		}()
+
+		select {
+		case <-started:
+		case <-time.After(10 * time.Second):
+			t.Fatal("lifecycle start hook did not run")
+		}
+
+		p, _ := os.FindProcess(os.Getpid())
+		_ = p.Signal(syscall.SIGTERM)
+
+		select {
+		case err := <-runDone:
+			if err != nil {
+				t.Fatalf("Run() returned unexpected error: %v", err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("Run() did not complete within timeout after SIGTERM")
+		}
+
+		if !stopCalled {
+			t.Error("expected lifecycle stop hook to run")
 		}
 	})
 
@@ -1238,35 +1249,6 @@ func TestRun_GracefulShutdown(t *testing.T) {
 		}
 	})
 
-	t.Run("shutdown respects configurable timeout", func(t *testing.T) {
-		clearConfigEnv(t)
-		t.Setenv("HTTP_ADDR", "127.0.0.1:0")
-		t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "100ms")
-
-		m := testModule{
-			name: "timeout-test",
-			register: func(ctx context.Context, app *App) error {
-				return nil
-			},
-		}
-
-		ctx, cancel := context.WithCancel(context.Background())
-		runDone := make(chan error, 1)
-		go func() {
-			runDone <- Run(ctx, m, WithHTTP())
-		}()
-
-		time.Sleep(200 * time.Millisecond)
-		cancel()
-
-		select {
-		case <-runDone:
-			// Completed within reasonable time
-		case <-time.After(5 * time.Second):
-			t.Fatal("shutdown took too long; timeout may not be respected")
-		}
-	})
-
 	t.Run("parent cancellation does not cancel lifecycle stop context", func(t *testing.T) {
 		clearConfigEnv(t)
 		t.Setenv("HTTP_ADDR", "127.0.0.1:0")
@@ -1314,131 +1296,6 @@ func TestRun_GracefulShutdown(t *testing.T) {
 			t.Fatal("expected stop hook to receive a context")
 		}
 	})
-}
-
-func TestRun_HTTPServer_ServesRoutes(t *testing.T) {
-	t.Run("healthz and readyz are served on running server", func(t *testing.T) {
-		clearConfigEnv(t)
-		addr := unusedTCPAddr(t)
-		t.Setenv("HTTP_ADDR", addr)
-		t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "5s")
-
-		m := testModule{
-			name: "serve-routes-test",
-			register: func(ctx context.Context, app *App) error {
-				return nil
-			},
-		}
-
-		ctx, cancel := context.WithCancel(context.Background())
-		runDone := make(chan error, 1)
-		go func() {
-			runDone <- Run(ctx, m, WithHTTP())
-		}()
-
-		// Wait for server to start
-		time.Sleep(200 * time.Millisecond)
-
-		// Test healthz
-		resp, err := http.Get("http://" + addr + "/healthz")
-		if err != nil {
-			t.Fatalf("failed to GET /healthz: %v", err)
-		}
-		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			t.Errorf("healthz status = %d, want %d", resp.StatusCode, http.StatusOK)
-		}
-
-		// Test readyz
-		resp, err = http.Get("http://" + addr + "/readyz")
-		if err != nil {
-			t.Fatalf("failed to GET /readyz: %v", err)
-		}
-		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			t.Errorf("readyz status = %d, want %d", resp.StatusCode, http.StatusOK)
-		}
-
-		cancel()
-
-		select {
-		case err := <-runDone:
-			if err != nil {
-				t.Fatalf("Run() returned unexpected error: %v", err)
-			}
-		case <-time.After(10 * time.Second):
-			t.Fatal("Run() did not complete within timeout")
-		}
-	})
-
-	t.Run("custom routes are served", func(t *testing.T) {
-		clearConfigEnv(t)
-		addr := unusedTCPAddr(t)
-		t.Setenv("HTTP_ADDR", addr)
-		t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "5s")
-
-		m := testModule{
-			name: "custom-routes-test",
-			register: func(ctx context.Context, app *App) error {
-				app.HTTP().Get("/hello", func(w http.ResponseWriter, r *http.Request) {
-					w.Header().Set("Content-Type", "application/json")
-					w.WriteHeader(http.StatusOK)
-					_, _ = w.Write([]byte(`{"message":"hello"}`))
-				})
-				return nil
-			},
-		}
-
-		ctx, cancel := context.WithCancel(context.Background())
-		runDone := make(chan error, 1)
-		go func() {
-			runDone <- Run(ctx, m, WithHTTP())
-		}()
-
-		time.Sleep(200 * time.Millisecond)
-
-		resp, err := http.Get("http://" + addr + "/hello")
-		if err != nil {
-			t.Fatalf("failed to GET /hello: %v", err)
-		}
-		defer func() { _ = resp.Body.Close() }()
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
-		}
-
-		var body map[string]string
-		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-			t.Fatalf("failed to decode response: %v", err)
-		}
-		if body["message"] != "hello" {
-			t.Errorf("message = %q, want %q", body["message"], "hello")
-		}
-
-		cancel()
-
-		select {
-		case err := <-runDone:
-			if err != nil {
-				t.Fatalf("Run() returned unexpected error: %v", err)
-			}
-		case <-time.After(10 * time.Second):
-			t.Fatal("Run() did not complete within timeout")
-		}
-	})
-}
-
-func unusedTCPAddr(t *testing.T) string {
-	t.Helper()
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to allocate test listener: %v", err)
-	}
-	addr := ln.Addr().String()
-	if err := ln.Close(); err != nil {
-		t.Fatalf("failed to release test listener: %v", err)
-	}
-	return addr
 }
 
 func TestRun_NoHTTP(t *testing.T) {

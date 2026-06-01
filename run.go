@@ -4,13 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
-	"github.com/kusold/grove/lifecycle"
+	"github.com/kusold/grove/httpx"
 )
 
 // Main is the primary entry point for a Grove service. It calls Run with the
@@ -35,10 +33,10 @@ func Main(module Module, opts ...Option) {
 // any option fails, dependency validation fails, module registration fails, or
 // a lifecycle hook fails.
 //
-// When the HTTP capability is enabled, Run wires /healthz and /readyz routes,
-// starts lifecycle hooks, starts the HTTP server, and blocks until SIGINT or
-// SIGTERM is received. On signal, it shuts down the HTTP server with a
-// configurable timeout and then runs lifecycle stop hooks in reverse order.
+// When the HTTP capability is enabled, Run configures the HTTP transport, starts
+// lifecycle hooks, starts the HTTP server, and blocks until SIGINT or SIGTERM is
+// received. On signal, it shuts down the HTTP server with a configurable timeout
+// and then runs lifecycle stop hooks in reverse order.
 //
 // Run does not call os.Exit, making it suitable for testing and programmatic
 // use.
@@ -57,31 +55,16 @@ func Run(ctx context.Context, module Module, opts ...Option) error {
 		return nil
 	}
 
-	// Wire /healthz and /readyz routes.
-	reg := app.HTTP()
-	reg.Get("/healthz", app.Health().HealthzHandler())
-	reg.Get("/readyz", app.Health().ReadyzHandler())
-
-	// Configure shutdown timeout from config.
-	shutdownTimeout, err := time.ParseDuration(app.Config().HTTP().ShutdownTimeout)
-	if err != nil {
-		return fmt.Errorf("invalid HTTP_SHUTDOWN_TIMEOUT %q: %w", app.Config().HTTP().ShutdownTimeout, err)
-	}
-
-	// Register the HTTP server stop as a lifecycle hook so it runs in the
-	// correct order relative to other stop hooks (e.g., DB cleanup).
-	httpServer := &http.Server{Addr: app.Config().HTTP().Addr, Handler: app.HTTP()}
-	app.Lifecycle().Append(lifecycle.Hook{
-		Name: "http-server",
-		Stop: func(ctx context.Context) error {
-			shutdownCtx, cancel := context.WithTimeout(ctx, shutdownTimeout)
-			defer cancel()
-			if err := httpServer.Shutdown(shutdownCtx); err != nil {
-				return fmt.Errorf("http server shutdown: %w", err)
-			}
-			return nil
-		},
+	httpServer, err := httpx.NewServer(httpx.ServerOptions{
+		Registry: app.HTTP(),
+		Health:   app.Health(),
+		Config:   app.Config().HTTP(),
+		Logger:   app.Logger(),
 	})
+	if err != nil {
+		return err
+	}
+	httpServer.RegisterLifecycle(app.Lifecycle())
 
 	// Register signal handling before startup hooks so SIGINT/SIGTERM received
 	// during startup are handled by Grove instead of the process default.
@@ -93,16 +76,7 @@ func Run(ctx context.Context, module Module, opts ...Option) error {
 		return fmt.Errorf("lifecycle start: %w", err)
 	}
 
-	// Start listening in a goroutine. ListenAndServe always returns a non-nil
-	// error; http.ErrServerClosed is expected during graceful shutdown.
-	serverErr := make(chan error, 1)
-	go func() {
-		app.Logger().Info("http server starting", "addr", httpServer.Addr)
-		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			serverErr <- err
-		}
-		close(serverErr)
-	}()
+	serverErr := httpServer.Run()
 
 	select {
 	case <-sigCtx.Done():
