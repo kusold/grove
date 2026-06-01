@@ -83,8 +83,13 @@ func Run(ctx context.Context, module Module, opts ...Option) error {
 		},
 	})
 
+	// Register signal handling before startup hooks so SIGINT/SIGTERM received
+	// during startup are handled by Grove instead of the process default.
+	sigCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	// Run lifecycle start hooks (module registration is complete).
-	if err := app.Lifecycle().Start(ctx); err != nil {
+	if err := app.Lifecycle().Start(sigCtx); err != nil {
 		return fmt.Errorf("lifecycle start: %w", err)
 	}
 
@@ -98,10 +103,6 @@ func Run(ctx context.Context, module Module, opts ...Option) error {
 		}
 		close(serverErr)
 	}()
-
-	// Block until SIGINT, SIGTERM, or a server error.
-	sigCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	select {
 	case <-sigCtx.Done():
