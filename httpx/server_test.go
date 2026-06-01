@@ -138,10 +138,11 @@ func TestServerRun(t *testing.T) {
 		addr := unusedTCPAddr(t)
 		reg := New()
 		handlerStarted := make(chan struct{})
+		handlerDone := make(chan struct{})
 		reg.Get("/slow", func(w http.ResponseWriter, r *http.Request) {
 			close(handlerStarted)
-			time.Sleep(200 * time.Millisecond)
-			w.WriteHeader(http.StatusOK)
+			defer close(handlerDone)
+			<-r.Context().Done()
 		})
 
 		server := newTestServer(t, reg, config.HTTPConfig{
@@ -183,6 +184,11 @@ func TestServerRun(t *testing.T) {
 		case <-serverErr:
 		case <-time.After(5 * time.Second):
 			t.Fatal("server did not stop after shutdown timeout")
+		}
+		select {
+		case <-handlerDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("slow handler was not canceled after shutdown timeout")
 		}
 		select {
 		case <-requestDone:
