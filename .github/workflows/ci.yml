@@ -38,7 +38,7 @@ jobs:
       - name: Test with coverage
         run: |
           set -o pipefail
-          go test -coverprofile=coverage.out ./... | tee coverage.txt
+          go test -race -coverprofile=coverage.out ./... | tee coverage.txt
 
       - name: Print coverage summary
         run: go tool cover -func=coverage.out
