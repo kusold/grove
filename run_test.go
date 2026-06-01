@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1086,6 +1087,48 @@ func TestRun_HTTPServer(t *testing.T) {
 			t.Errorf("error = %q, want to contain 'lifecycle start'", err.Error())
 		}
 	})
+
+	t.Run("stops lifecycle hooks when server fails to start", func(t *testing.T) {
+		clearConfigEnv(t)
+
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("failed to reserve listener: %v", err)
+		}
+		defer func() { _ = ln.Close() }()
+
+		t.Setenv("HTTP_ADDR", ln.Addr().String())
+		t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "5s")
+
+		var stopCalled bool
+		m := testModule{
+			name: "server-start-fail",
+			register: func(ctx context.Context, app *App) error {
+				app.Lifecycle().Append(lifecycle.Hook{
+					Name: "started-resource",
+					Start: func(ctx context.Context) error {
+						return nil
+					},
+					Stop: func(ctx context.Context) error {
+						stopCalled = true
+						return nil
+					},
+				})
+				return nil
+			},
+		}
+
+		err = Run(context.Background(), m, WithHTTP())
+		if err == nil {
+			t.Fatal("expected server startup error")
+		}
+		if !strings.Contains(err.Error(), "http server error") {
+			t.Errorf("error = %q, want to contain 'http server error'", err.Error())
+		}
+		if !stopCalled {
+			t.Error("expected lifecycle stop hook to run after server startup failure")
+		}
+	})
 }
 
 func TestRun_GracefulShutdown(t *testing.T) {
@@ -1221,6 +1264,54 @@ func TestRun_GracefulShutdown(t *testing.T) {
 			// Completed within reasonable time
 		case <-time.After(5 * time.Second):
 			t.Fatal("shutdown took too long; timeout may not be respected")
+		}
+	})
+
+	t.Run("parent cancellation does not cancel lifecycle stop context", func(t *testing.T) {
+		clearConfigEnv(t)
+		t.Setenv("HTTP_ADDR", "127.0.0.1:0")
+		t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "5s")
+
+		stopCtxErr := make(chan error, 1)
+		m := testModule{
+			name: "cancel-stop-context-test",
+			register: func(ctx context.Context, app *App) error {
+				app.Lifecycle().Append(lifecycle.Hook{
+					Name: "inspect-stop-context",
+					Stop: func(ctx context.Context) error {
+						stopCtxErr <- ctx.Err()
+						return nil
+					},
+				})
+				return nil
+			},
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		runDone := make(chan error, 1)
+		go func() {
+			runDone <- Run(ctx, m, WithHTTP())
+		}()
+
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+
+		select {
+		case err := <-runDone:
+			if err != nil {
+				t.Fatalf("Run() returned unexpected error: %v", err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("Run() did not complete within timeout")
+		}
+
+		select {
+		case err := <-stopCtxErr:
+			if err != nil {
+				t.Fatalf("stop hook context was canceled: %v", err)
+			}
+		default:
+			t.Fatal("expected stop hook to receive a context")
 		}
 	})
 }
