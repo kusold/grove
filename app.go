@@ -87,9 +87,12 @@ func (a *App) requireCapability(c capability) error {
 	)
 }
 
-// newApp creates an App with the given name and applies the provided options.
-// If any option returns an error, application stops and the error is returned.
-func newApp(name string, opts ...Option) (*App, error) {
+// NewApp creates an App with the given name and applies the provided options.
+// It is intended for use in tests that need to exercise Module.Register against
+// a real App. Production code should use Main or Run instead.
+//
+// If any option returns an error, NewApp returns that error.
+func NewApp(name string, opts ...Option) (*App, error) {
 	b := newBuilder(name)
 	if err := b.applyOptions(opts...); err != nil {
 		return nil, err
