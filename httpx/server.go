@@ -75,6 +75,12 @@ func (s *Server) RegisterLifecycle(lc *lifecycle.Manager) {
 			shutdownCtx, cancel := context.WithTimeout(ctx, s.shutdownTimeout)
 			defer cancel()
 			if err := s.server.Shutdown(shutdownCtx); err != nil {
+				if closeErr := s.server.Close(); closeErr != nil && !errors.Is(closeErr, http.ErrServerClosed) {
+					return errors.Join(
+						fmt.Errorf("http server shutdown: %w", err),
+						fmt.Errorf("http server close: %w", closeErr),
+					)
+				}
 				return fmt.Errorf("http server shutdown: %w", err)
 			}
 			return nil
