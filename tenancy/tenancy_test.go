@@ -2,6 +2,8 @@ package tenancy
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -125,6 +127,209 @@ func TestRequire(t *testing.T) {
 		}
 		if !strings.Contains(msg, "grove:") {
 			t.Errorf("error = %q, want to contain 'grove:' prefix", msg)
+		}
+	})
+}
+
+func TestResolverInterface(t *testing.T) {
+	t.Run("HeaderResolver implements Resolver", func(t *testing.T) {
+		// This test exists to ensure HeaderResolver satisfies the Resolver
+		// interface at compile time. If it does not, this line will fail to
+		// compile.
+		var _ Resolver = HeaderResolver{}
+	})
+
+	t.Run("*struct can implement Resolver for auth-based resolvers", func(t *testing.T) {
+		// Verify the interface is compatible with pointer receivers so future
+		// auth-claim-based resolvers can hold state (e.g. OIDC verifier).
+		resolver := struct{ Resolver }{Resolver: HeaderResolver{}}
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("X-Tenant-ID", "t1")
+		req.Header.Set("X-Tenant-Slug", "acme")
+
+		tenant, ok, err := resolver.ResolveTenant(req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !ok {
+			t.Fatal("expected tenant to be found")
+		}
+		if tenant.ID != "t1" {
+			t.Errorf("ID = %q, want %q", tenant.ID, "t1")
+		}
+		if tenant.Slug != "acme" {
+			t.Errorf("Slug = %q, want %q", tenant.Slug, "acme")
+		}
+	})
+}
+
+func TestHeaderResolver(t *testing.T) {
+	resolver := HeaderResolver{}
+
+	t.Run("resolves tenant from both headers", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("X-Tenant-ID", "00000000-0000-0000-0000-000000000001")
+		req.Header.Set("X-Tenant-Slug", "acme")
+
+		tenant, ok, err := resolver.ResolveTenant(req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !ok {
+			t.Fatal("expected ok to be true")
+		}
+		if tenant.ID != "00000000-0000-0000-0000-000000000001" {
+			t.Errorf("ID = %q, want %q", tenant.ID, "00000000-0000-0000-0000-000000000001")
+		}
+		if tenant.Slug != "acme" {
+			t.Errorf("Slug = %q, want %q", tenant.Slug, "acme")
+		}
+	})
+
+	t.Run("returns false without error when no headers present", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+
+		tenant, ok, err := resolver.ResolveTenant(req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ok {
+			t.Error("expected ok to be false")
+		}
+		if tenant != (Tenant{}) {
+			t.Errorf("expected zero-value Tenant, got %v", tenant)
+		}
+	})
+
+	t.Run("returns error when X-Tenant-ID present but X-Tenant-Slug missing", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("X-Tenant-ID", "t1")
+
+		_, ok, err := resolver.ResolveTenant(req)
+		if err == nil {
+			t.Fatal("expected error when ID header present without Slug")
+		}
+		if ok {
+			t.Error("expected ok to be false")
+		}
+		if !strings.Contains(err.Error(), "X-Tenant-Slug is missing") {
+			t.Errorf("error = %q, want to contain 'X-Tenant-Slug is missing'", err.Error())
+		}
+	})
+
+	t.Run("returns error when X-Tenant-Slug present but X-Tenant-ID missing", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("X-Tenant-Slug", "acme")
+
+		_, ok, err := resolver.ResolveTenant(req)
+		if err == nil {
+			t.Fatal("expected error when Slug header present without ID")
+		}
+		if ok {
+			t.Error("expected ok to be false")
+		}
+		if !strings.Contains(err.Error(), "X-Tenant-ID is missing") {
+			t.Errorf("error = %q, want to contain 'X-Tenant-ID is missing'", err.Error())
+		}
+	})
+
+	t.Run("returns error when X-Tenant-ID is whitespace only", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("X-Tenant-ID", "  ")
+		req.Header.Set("X-Tenant-Slug", "acme")
+
+		_, ok, err := resolver.ResolveTenant(req)
+		if err == nil {
+			t.Fatal("expected error for whitespace-only ID")
+		}
+		if ok {
+			t.Error("expected ok to be false")
+		}
+		if !strings.Contains(err.Error(), "X-Tenant-ID") {
+			t.Errorf("error = %q, want to mention X-Tenant-ID", err.Error())
+		}
+	})
+
+	t.Run("returns error when X-Tenant-Slug is whitespace only", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("X-Tenant-ID", "t1")
+		req.Header.Set("X-Tenant-Slug", "\t\n")
+
+		_, ok, err := resolver.ResolveTenant(req)
+		if err == nil {
+			t.Fatal("expected error for whitespace-only Slug")
+		}
+		if ok {
+			t.Error("expected ok to be false")
+		}
+		if !strings.Contains(err.Error(), "X-Tenant-Slug") {
+			t.Errorf("error = %q, want to mention X-Tenant-Slug", err.Error())
+		}
+	})
+
+	t.Run("preserves exact header values including non-whitespace", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("X-Tenant-ID", "  t1  ")
+		req.Header.Set("X-Tenant-Slug", "acme-corp")
+
+		tenant, ok, err := resolver.ResolveTenant(req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !ok {
+			t.Fatal("expected ok to be true")
+		}
+		if tenant.ID != "  t1  " {
+			t.Errorf("ID = %q, want %q (should preserve surrounding spaces)", tenant.ID, "  t1  ")
+		}
+		if tenant.Slug != "acme-corp" {
+			t.Errorf("Slug = %q, want %q", tenant.Slug, "acme-corp")
+		}
+	})
+
+	t.Run("works with POST requests", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/widgets", nil)
+		req.Header.Set("X-Tenant-ID", "t99")
+		req.Header.Set("X-Tenant-Slug", "post-tenant")
+
+		tenant, ok, err := resolver.ResolveTenant(req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !ok {
+			t.Fatal("expected ok to be true")
+		}
+		if tenant.ID != "t99" {
+			t.Errorf("ID = %q, want %q", tenant.ID, "t99")
+		}
+		if tenant.Slug != "post-tenant" {
+			t.Errorf("Slug = %q, want %q", tenant.Slug, "post-tenant")
+		}
+	})
+
+	t.Run("error messages have grove: prefix", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("X-Tenant-ID", "t1")
+
+		_, _, err := resolver.ResolveTenant(req)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "grove:") {
+			t.Errorf("error = %q, want to contain 'grove:' prefix", err.Error())
+		}
+	})
+
+	t.Run("zero value HeaderResolver works without initialization", func(t *testing.T) {
+		var r HeaderResolver
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+
+		_, ok, err := r.ResolveTenant(req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ok {
+			t.Error("expected ok to be false with no headers")
 		}
 	})
 }
