@@ -6,12 +6,11 @@ package tenancy
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 
-	"github.com/kusold/grove/httpx"
+	"github.com/kusold/grove/apperr"
 )
 
 // Tenant represents the resolved identity of a tenant. ID will likely become
@@ -21,13 +20,6 @@ type Tenant struct {
 	ID   string
 	Slug string
 }
-
-const (
-	tenantRequiredCode    = "tenant_required"
-	invalidTenantCode     = "invalid_tenant"
-	tenantRequiredMessage = "tenant is required"
-	invalidTenantMessage  = "invalid tenant"
-)
 
 type tenantKey struct{}
 
@@ -137,7 +129,7 @@ func Middleware(resolver Resolver) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			tenant, found, err := resolver.ResolveTenant(r)
 			if err != nil {
-				writeTenantError(w, r, http.StatusBadRequest, invalidTenantCode, invalidTenantMessage)
+				writeTenantError(w, r, apperr.InvalidTenant())
 				return
 			}
 			if found {
@@ -163,7 +155,7 @@ func RequireMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if _, err := Require(r.Context()); err != nil {
-				writeTenantError(w, r, http.StatusUnprocessableEntity, tenantRequiredCode, tenantRequiredMessage)
+				writeTenantError(w, r, apperr.TenantRequired())
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -175,42 +167,9 @@ func usableTenant(tenant Tenant) bool {
 	return strings.TrimSpace(tenant.ID) != "" && strings.TrimSpace(tenant.Slug) != ""
 }
 
-// tenantErrorResponse is the JSON structure for framework-generated tenant
-// errors. The structure matches the cross-cutting error handling convention
-// described in the implementation plan:
-//
-//	{"error":{"code":"...","message":"...","request_id":"..."}}
-//
-// RequestID is included when a request ID is available in context. The
-// request ID middleware may not exist yet, so the field is omitted when empty.
-type tenantErrorResponse struct {
-	Error tenantErrorDetail `json:"error"`
-}
-
-type tenantErrorDetail struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	RequestID string `json:"request_id,omitempty"`
-}
-
-// writeTenantError writes a JSON error response for tenant-related failures.
-// It sets Content-Type to application/json and includes a request ID in the
-// response if one is present in the context.
-func writeTenantError(w http.ResponseWriter, r *http.Request, statusCode int, code, message string) {
-	var requestID string
-	if id, ok := httpx.RequestIDFromContext(r.Context()); ok {
-		requestID = id
-	}
-
-	resp := tenantErrorResponse{
-		Error: tenantErrorDetail{
-			Code:      code,
-			Message:   message,
-			RequestID: requestID,
-		},
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-	_ = json.NewEncoder(w).Encode(resp)
+// writeTenantError writes a consistent JSON error response for tenant-related
+// failures using the apperr package. It delegates to apperr.WriteError which
+// handles Content-Type, status code, request ID inclusion, and JSON encoding.
+func writeTenantError(w http.ResponseWriter, r *http.Request, appErr *apperr.Error) {
+	apperr.WriteError(w, r, appErr)
 }
