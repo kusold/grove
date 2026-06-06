@@ -453,8 +453,8 @@ func TestMiddleware(t *testing.T) {
 		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 			t.Fatalf("decode error response: %v", err)
 		}
-		if body.Error.Code != "tenant_required" {
-			t.Errorf("code = %q, want %q", body.Error.Code, "tenant_required")
+		if body.Error.Code != invalidTenantCode {
+			t.Errorf("code = %q, want %q", body.Error.Code, invalidTenantCode)
 		}
 		if body.Error.Message != invalidTenantMessage {
 			t.Errorf("message = %q, want %q", body.Error.Message, invalidTenantMessage)
@@ -483,8 +483,8 @@ func TestMiddleware(t *testing.T) {
 		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 			t.Fatalf("decode error response: %v", err)
 		}
-		if body.Error.Code != "tenant_required" {
-			t.Errorf("code = %q, want %q", body.Error.Code, "tenant_required")
+		if body.Error.Code != invalidTenantCode {
+			t.Errorf("code = %q, want %q", body.Error.Code, invalidTenantCode)
 		}
 		if body.Error.Message != invalidTenantMessage {
 			t.Errorf("message = %q, want %q", body.Error.Message, invalidTenantMessage)
