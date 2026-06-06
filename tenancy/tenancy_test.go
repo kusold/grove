@@ -675,16 +675,18 @@ func TestMiddleware(t *testing.T) {
 
 	t.Run("RequireMiddleware before Middleware rejects when no tenant in context", func(t *testing.T) {
 		// Wrong middleware order: RequireMiddleware runs before Middleware.
-		// Since no tenant is in context yet, RequireMiddleware should reject.
+		// Even with valid tenant headers, no tenant is in context yet, so
+		// RequireMiddleware should reject before Middleware can resolve one.
 		inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			t.Error("handler should not be called")
 		})
 
 		// Build in wrong order: RequireMiddleware first, then Middleware
-		stack := Middleware(HeaderResolver{})(RequireMiddleware()(inner))
+		stack := RequireMiddleware()(Middleware(HeaderResolver{})(inner))
 
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)
-		// No tenant headers
+		req.Header.Set("X-Tenant-ID", "t1")
+		req.Header.Set("X-Tenant-Slug", "acme")
 		rec := httptest.NewRecorder()
 
 		stack.ServeHTTP(rec, req)
