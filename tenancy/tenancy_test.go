@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/kusold/grove/httpx"
 )
 
 func TestTenant(t *testing.T) {
@@ -491,7 +493,7 @@ func TestMiddleware(t *testing.T) {
 		handler := Middleware(errResolver)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)
-		ctx := context.WithValue(req.Context(), requestIDKey{}, "req-123")
+		ctx := httpx.WithRequestID(req.Context(), "req-123")
 		req = req.WithContext(ctx)
 		rec := httptest.NewRecorder()
 
@@ -668,7 +670,7 @@ func TestRequireMiddleware(t *testing.T) {
 		}))
 
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)
-		ctx := context.WithValue(req.Context(), requestIDKey{}, "req-abc-456")
+		ctx := httpx.WithRequestID(req.Context(), "req-abc-456")
 		req = req.WithContext(ctx)
 		rec := httptest.NewRecorder()
 
