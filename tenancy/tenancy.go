@@ -6,6 +6,7 @@ package tenancy
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -109,4 +110,102 @@ func (HeaderResolver) ResolveTenant(r *http.Request) (Tenant, bool, error) {
 	}
 
 	return Tenant{ID: id, Slug: slug}, true, nil
+}
+
+// Middleware returns an HTTP middleware that resolves a tenant from the request
+// using the provided Resolver. If a tenant is found, it is attached to the
+// request context. If no tenant is found, the request passes through without
+// modification. If the resolver returns an error, the middleware responds with
+// HTTP 400 and a JSON error body.
+//
+// This middleware does not reject requests when no tenant is present. Use
+// RequireMiddleware on route groups that must have a tenant.
+//
+// Typical composition: Middleware first (globally), then RequireMiddleware on
+// specific route groups.
+func Middleware(resolver Resolver) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			tenant, found, err := resolver.ResolveTenant(r)
+			if err != nil {
+				writeTenantError(w, r, http.StatusBadRequest, err.Error())
+				return
+			}
+			if found {
+				r = r.WithContext(WithTenant(r.Context(), tenant))
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// RequireMiddleware returns an HTTP middleware that rejects requests when no
+// tenant exists in the request context. It should be used after Middleware on
+// route groups that require a tenant.
+//
+// When no tenant is present, it responds with HTTP 422 and a consistent JSON
+// error body:
+//
+//	{"error":{"code":"tenant_required","message":"tenant is required"}}
+//
+// This middleware fails closed: if there is no tenant in context, the request
+// is always rejected regardless of other conditions.
+func RequireMiddleware() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, ok := FromContext(r.Context())
+			if !ok {
+				writeTenantError(w, r, http.StatusUnprocessableEntity,
+					"grove: tenant is required but was not found in context")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// tenantErrorResponse is the JSON structure for framework-generated tenant
+// errors. The structure matches the cross-cutting error handling convention
+// described in the implementation plan:
+//
+//	{"error":{"code":"...","message":"...","request_id":"..."}}
+//
+// RequestID is included when a request ID is available in context. The
+// request ID middleware may not exist yet, so the field is omitted when empty.
+type tenantErrorResponse struct {
+	Error tenantErrorDetail `json:"error"`
+}
+
+type tenantErrorDetail struct {
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	RequestID string `json:"request_id,omitempty"`
+}
+
+// requestIDKey is a context key for request ID. It is defined here to avoid
+// importing an observability package that may not exist yet. When a request ID
+// middleware is introduced (Phase 9), it should use the same key or provide a
+// canonical accessor.
+type requestIDKey struct{}
+
+// writeTenantError writes a JSON error response for tenant-related failures.
+// It sets Content-Type to application/json and includes a request ID in the
+// response if one is present in the context.
+func writeTenantError(w http.ResponseWriter, r *http.Request, statusCode int, message string) {
+	var requestID string
+	if id, ok := r.Context().Value(requestIDKey{}).(string); ok && id != "" {
+		requestID = id
+	}
+
+	resp := tenantErrorResponse{
+		Error: tenantErrorDetail{
+			Code:      "tenant_required",
+			Message:   message,
+			RequestID: requestID,
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	_ = json.NewEncoder(w).Encode(resp)
 }
