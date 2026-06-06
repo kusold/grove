@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/kusold/grove/httpx"
 )
 
 // Tenant represents the resolved identity of a tenant. ID will likely become
@@ -182,18 +184,12 @@ type tenantErrorDetail struct {
 	RequestID string `json:"request_id,omitempty"`
 }
 
-// requestIDKey is a context key for request ID. It is defined here to avoid
-// importing an observability package that may not exist yet. When a request ID
-// middleware is introduced (Phase 9), it should use the same key or provide a
-// canonical accessor.
-type requestIDKey struct{}
-
 // writeTenantError writes a JSON error response for tenant-related failures.
 // It sets Content-Type to application/json and includes a request ID in the
 // response if one is present in the context.
 func writeTenantError(w http.ResponseWriter, r *http.Request, statusCode int, message string) {
 	var requestID string
-	if id, ok := r.Context().Value(requestIDKey{}).(string); ok && id != "" {
+	if id, ok := httpx.RequestIDFromContext(r.Context()); ok {
 		requestID = id
 	}
 
