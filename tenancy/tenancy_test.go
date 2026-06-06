@@ -267,6 +267,23 @@ func TestHeaderResolver(t *testing.T) {
 		}
 	})
 
+	t.Run("returns false without error when both headers are whitespace only", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("X-Tenant-ID", "  ")
+		req.Header.Set("X-Tenant-Slug", "\t\n")
+
+		tenant, ok, err := resolver.ResolveTenant(req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ok {
+			t.Error("expected ok to be false")
+		}
+		if tenant != (Tenant{}) {
+			t.Errorf("expected zero-value Tenant, got %v", tenant)
+		}
+	})
+
 	t.Run("preserves exact header values including non-whitespace", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		req.Header.Set("X-Tenant-ID", "  t1  ")

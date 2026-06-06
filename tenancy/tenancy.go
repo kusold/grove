@@ -77,15 +77,15 @@ type HeaderResolver struct{}
 
 // ResolveTenant extracts a Tenant from X-Tenant-ID and X-Tenant-Slug headers.
 // It returns (Tenant, true, nil) when both headers are present and non-empty.
-// It returns (Tenant{}, false, nil) when either header is absent or empty.
-// It returns (_, _, error) when a header contains only whitespace when the
-// other header has a valid value.
+// It returns (Tenant{}, false, nil) when both headers are absent or contain
+// only whitespace. It returns (_, _, error) when exactly one header has a
+// non-whitespace value.
 func (HeaderResolver) ResolveTenant(r *http.Request) (Tenant, bool, error) {
 	id := r.Header.Get("X-Tenant-ID")
 	slug := r.Header.Get("X-Tenant-Slug")
 
-	idPresent := id != ""
-	slugPresent := slug != ""
+	idPresent := strings.TrimSpace(id) != ""
+	slugPresent := strings.TrimSpace(slug) != ""
 
 	// Neither header present: no tenant, not an error.
 	if !idPresent && !slugPresent {
