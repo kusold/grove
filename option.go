@@ -354,22 +354,19 @@ func WithHTTP() Option {
 }
 
 // WithTenancy enables the tenancy capability and wires tenant resolution
-// middleware into the HTTP stack. The provided Resolver determines how tenant
-// identity is extracted from each request (e.g. from headers, auth claims, or
-// subdomain). When enabled, tenancy.Middleware is applied globally so that
-// tenant context is available to all handlers.
+// middleware into the HTTP stack. It uses tenancy.HeaderResolver, which extracts
+// tenant identity from X-Tenant-ID and X-Tenant-Slug headers for local/demo use.
+// When enabled, tenancy.Middleware is applied globally so that tenant context
+// is available to all handlers.
 //
 // Tenancy requires the HTTP capability. If WithHTTP() is not also provided,
 // Grove will fail at startup with a clear error:
 //
 //	grove: tenancy requires http, but it was not enabled; add grove.WithHTTP()
-func WithTenancy(resolver tenancy.Resolver) Option {
+func WithTenancy() Option {
 	return func(b *builder) error {
-		if resolver == nil {
-			return fmt.Errorf("grove: WithTenancy requires a non-nil Resolver")
-		}
 		b.enableCapability(capTenancy)
-		b.tenancyResolver = resolver
+		b.tenancyResolver = tenancy.HeaderResolver{}
 		return nil
 	}
 }
