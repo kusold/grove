@@ -11,6 +11,7 @@ import (
 	"github.com/kusold/grove/health"
 	"github.com/kusold/grove/httpx"
 	"github.com/kusold/grove/lifecycle"
+	"github.com/kusold/grove/tenancy"
 )
 
 // Option configures a Grove app during construction. Options are applied in
@@ -19,40 +20,47 @@ import (
 type Option func(*builder) error
 
 type builder struct {
-	name         string
-	capabilities map[capability]bool
+	name            string
+	capabilities    map[capability]bool
+	tenancyResolver tenancy.Resolver
 }
 
 // capability represents a named capability that can be enabled on an App.
 type capability string
 
 const (
-	capHTTP capability = "http"
+	capHTTP    capability = "http"
+	capTenancy capability = "tenancy"
 )
 
 // capabilityDeps maps each capability to its required dependencies.
 // A capability cannot be enabled unless all of its dependencies are also
 // enabled. Dependencies are validated after all options are applied, so the
 // order of options does not matter.
-var capabilityDeps = map[capability][]capability{}
+var capabilityDeps = map[capability][]capability{
+	capTenancy: {capHTTP},
+}
 
 // capabilityOrder defines the deterministic initialization order for
 // capabilities. Capabilities are initialized in this order regardless of the
 // order in which options are passed to Main or Run.
 var capabilityOrder = []capability{
 	capHTTP,
+	capTenancy,
 }
 
 // capabilityOptionName maps each capability to the Option function name used
 // in error messages to guide users toward the fix.
 var capabilityOptionName = map[capability]string{
-	capHTTP: "WithHTTP",
+	capHTTP:    "WithHTTP",
+	capTenancy: "WithTenancy",
 }
 
 // capabilityDisplayName maps each capability to a human-readable name used in
 // error messages.
 var capabilityDisplayName = map[capability]string{
-	capHTTP: "http",
+	capHTTP:    "http",
+	capTenancy: "tenancy",
 }
 
 func newBuilder(name string) *builder {
@@ -114,6 +122,14 @@ func (b *builder) buildApp() *App {
 	var httpReg *httpx.Registry
 	if b.hasCapability(capHTTP) {
 		httpReg = httpx.New()
+	}
+
+	// Wire tenant resolution middleware into the HTTP stack when the tenancy
+	// capability is enabled. This runs for every request so that tenant context
+	// is available to all handlers. Individual route groups can use
+	// tenancy.RequireMiddleware() to reject requests without a tenant.
+	if b.hasCapability(capTenancy) && httpReg != nil {
+		httpReg.Use(tenancy.Middleware(b.tenancyResolver))
 	}
 
 	return &App{
@@ -333,6 +349,27 @@ func (b *builder) capabilitySet() map[capability]bool {
 func WithHTTP() Option {
 	return func(b *builder) error {
 		b.enableCapability(capHTTP)
+		return nil
+	}
+}
+
+// WithTenancy enables the tenancy capability and wires tenant resolution
+// middleware into the HTTP stack. The provided Resolver determines how tenant
+// identity is extracted from each request (e.g. from headers, auth claims, or
+// subdomain). When enabled, tenancy.Middleware is applied globally so that
+// tenant context is available to all handlers.
+//
+// Tenancy requires the HTTP capability. If WithHTTP() is not also provided,
+// Grove will fail at startup with a clear error:
+//
+//	grove: tenancy requires http, but it was not enabled; add grove.WithHTTP()
+func WithTenancy(resolver tenancy.Resolver) Option {
+	return func(b *builder) error {
+		if resolver == nil {
+			return fmt.Errorf("grove: WithTenancy requires a non-nil Resolver")
+		}
+		b.enableCapability(capTenancy)
+		b.tenancyResolver = resolver
 		return nil
 	}
 }

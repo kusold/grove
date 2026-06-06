@@ -15,8 +15,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/kusold/grove/config"
 	"github.com/kusold/grove/lifecycle"
+	"github.com/kusold/grove/tenancy"
 )
 
 // testModule is a minimal Module implementation for testing.
@@ -1307,6 +1309,228 @@ func TestRun_NoHTTP(t *testing.T) {
 		err := Run(context.Background(), m)
 		if err != nil {
 			t.Fatalf("Run() without HTTP returned unexpected error: %v", err)
+		}
+	})
+}
+
+func TestWithTenancy(t *testing.T) {
+	t.Run("enables tenancy capability", func(t *testing.T) {
+		app, err := NewApp("test", WithHTTP(), WithTenancy(tenancy.HeaderResolver{}))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !app.hasCapability(capTenancy) {
+			t.Error("expected tenancy capability to be enabled")
+		}
+	})
+
+	t.Run("succeeds when HTTP is also enabled", func(t *testing.T) {
+		app, err := NewApp("test", WithHTTP(), WithTenancy(tenancy.HeaderResolver{}))
+		if err != nil {
+			t.Fatalf("expected no error when HTTP is enabled, got: %v", err)
+		}
+		if app == nil {
+			t.Fatal("expected non-nil app")
+		}
+	})
+
+	t.Run("fails when HTTP is not enabled", func(t *testing.T) {
+		_, err := NewApp("test", WithTenancy(tenancy.HeaderResolver{}))
+		if err == nil {
+			t.Fatal("expected error when WithTenancy is used without WithHTTP")
+		}
+		if !strings.Contains(err.Error(), "tenancy requires http") {
+			t.Errorf("error = %q, want to contain 'tenancy requires http'", err.Error())
+		}
+		if !strings.Contains(err.Error(), "grove.WithHTTP()") {
+			t.Errorf("error = %q, want to contain 'grove.WithHTTP()'", err.Error())
+		}
+	})
+
+	t.Run("fails with clear error via Run", func(t *testing.T) {
+		m := testModule{name: "tenancy-no-http"}
+		err := Run(context.Background(), m, WithTenancy(tenancy.HeaderResolver{}))
+		if err == nil {
+			t.Fatal("expected error when WithTenancy is used without WithHTTP")
+		}
+		if !strings.Contains(err.Error(), "tenancy requires http") {
+			t.Errorf("error = %q, want to contain 'tenancy requires http'", err.Error())
+		}
+		if !strings.Contains(err.Error(), "grove.WithHTTP()") {
+			t.Errorf("error = %q, want to contain 'grove.WithHTTP()'", err.Error())
+		}
+	})
+
+	t.Run("returns error when resolver is nil", func(t *testing.T) {
+		_, err := NewApp("test", WithHTTP(), WithTenancy(nil))
+		if err == nil {
+			t.Fatal("expected error when resolver is nil")
+		}
+		if !strings.Contains(err.Error(), "non-nil Resolver") {
+			t.Errorf("error = %q, want to contain 'non-nil Resolver'", err.Error())
+		}
+	})
+
+	t.Run("is idempotent", func(t *testing.T) {
+		app, err := NewApp("test",
+			WithHTTP(),
+			WithTenancy(tenancy.HeaderResolver{}),
+			WithTenancy(tenancy.HeaderResolver{}),
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !app.hasCapability(capTenancy) {
+			t.Error("expected tenancy capability to be enabled")
+		}
+	})
+}
+
+func TestWithTenancy_MiddlewareWired(t *testing.T) {
+	t.Run("tenant middleware is wired into HTTP stack", func(t *testing.T) {
+		app, err := NewApp("test", WithHTTP(), WithTenancy(tenancy.HeaderResolver{}))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		var capturedID, capturedSlug string
+		app.HTTP().Get("/test-tenant", func(w http.ResponseWriter, r *http.Request) {
+			tenant, ok := tenancy.FromContext(r.Context())
+			if ok {
+				capturedID = tenant.ID
+				capturedSlug = tenant.Slug
+			}
+			w.WriteHeader(http.StatusOK)
+		})
+
+		req := httptest.NewRequest(http.MethodGet, "/test-tenant", nil)
+		req.Header.Set("X-Tenant-ID", "t-123")
+		req.Header.Set("X-Tenant-Slug", "acme")
+		rec := httptest.NewRecorder()
+
+		app.HTTP().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+		}
+		if capturedID != "t-123" {
+			t.Errorf("tenant ID = %q, want %q", capturedID, "t-123")
+		}
+		if capturedSlug != "acme" {
+			t.Errorf("tenant slug = %q, want %q", capturedSlug, "acme")
+		}
+	})
+
+	t.Run("tenant middleware works with RequireMiddleware on route groups", func(t *testing.T) {
+		app, err := NewApp("test", WithHTTP(), WithTenancy(tenancy.HeaderResolver{}))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		app.HTTP().Route("/api", func(r chi.Router) {
+			r.Use(tenancy.RequireMiddleware())
+			r.Get("/whoami", func(w http.ResponseWriter, r *http.Request) {
+				tenant, _ := tenancy.FromContext(r.Context())
+				w.Header().Set("Content-Type", "application/json")
+				if err := json.NewEncoder(w).Encode(map[string]string{
+					"tenant_id":   tenant.ID,
+					"tenant_slug": tenant.Slug,
+				}); err != nil {
+					http.Error(w, "internal error", http.StatusInternalServerError)
+				}
+			})
+		})
+
+		t.Run("allows request with tenant headers", func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/whoami", nil)
+			req.Header.Set("X-Tenant-ID", "t-456")
+			req.Header.Set("X-Tenant-Slug", "beta")
+			rec := httptest.NewRecorder()
+
+			app.HTTP().ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+			}
+
+			var body map[string]string
+			if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body["tenant_id"] != "t-456" {
+				t.Errorf("tenant_id = %q, want %q", body["tenant_id"], "t-456")
+			}
+			if body["tenant_slug"] != "beta" {
+				t.Errorf("tenant_slug = %q, want %q", body["tenant_slug"], "beta")
+			}
+		})
+
+		t.Run("rejects request without tenant headers with 422", func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/whoami", nil)
+			rec := httptest.NewRecorder()
+
+			app.HTTP().ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+			}
+
+			var body map[string]any
+			if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			errObj, _ := body["error"].(map[string]any)
+			if errObj["code"] != "tenant_required" {
+				t.Errorf("code = %v, want %q", errObj["code"], "tenant_required")
+			}
+		})
+	})
+
+	t.Run("non-tenant routes still work", func(t *testing.T) {
+		app, err := NewApp("test", WithHTTP(), WithTenancy(tenancy.HeaderResolver{}))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		app.HTTP().Get("/public", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, "public")
+		})
+
+		req := httptest.NewRequest(http.MethodGet, "/public", nil)
+		rec := httptest.NewRecorder()
+		app.HTTP().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+		}
+		if rec.Body.String() != "public" {
+			t.Errorf("body = %q, want %q", rec.Body.String(), "public")
+		}
+	})
+
+	t.Run("tenant middleware is not wired when tenancy is not enabled", func(t *testing.T) {
+		app, err := NewApp("test", WithHTTP())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		app.HTTP().Get("/check", func(w http.ResponseWriter, r *http.Request) {
+			_, ok := tenancy.FromContext(r.Context())
+			if ok {
+				t.Error("did not expect tenant in context when tenancy is not enabled")
+			}
+			w.WriteHeader(http.StatusOK)
+		})
+
+		req := httptest.NewRequest(http.MethodGet, "/check", nil)
+		req.Header.Set("X-Tenant-ID", "t-999")
+		req.Header.Set("X-Tenant-Slug", "sneaky")
+		rec := httptest.NewRecorder()
+		app.HTTP().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 		}
 	})
 }
