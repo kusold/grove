@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kusold/grove/apperr"
 	"github.com/kusold/grove/httpx"
 )
 
@@ -449,15 +450,15 @@ func TestMiddleware(t *testing.T) {
 			t.Errorf("Content-Type = %q, want %q", ct, "application/json")
 		}
 
-		var body tenantErrorResponse
+		var body apperr.ErrorResponse
 		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 			t.Fatalf("decode error response: %v", err)
 		}
-		if body.Error.Code != invalidTenantCode {
-			t.Errorf("code = %q, want %q", body.Error.Code, invalidTenantCode)
+		if body.Error.Code != "invalid_tenant" {
+			t.Errorf("code = %q, want %q", body.Error.Code, "invalid_tenant")
 		}
-		if body.Error.Message != invalidTenantMessage {
-			t.Errorf("message = %q, want %q", body.Error.Message, invalidTenantMessage)
+		if body.Error.Message != "invalid tenant" {
+			t.Errorf("message = %q, want %q", body.Error.Message, "invalid tenant")
 		}
 		if strings.Contains(body.Error.Message, "X-Tenant-Slug") {
 			t.Errorf("message = %q, should not expose resolver details", body.Error.Message)
@@ -479,15 +480,15 @@ func TestMiddleware(t *testing.T) {
 			t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 		}
 
-		var body tenantErrorResponse
+		var body apperr.ErrorResponse
 		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 			t.Fatalf("decode error response: %v", err)
 		}
-		if body.Error.Code != invalidTenantCode {
-			t.Errorf("code = %q, want %q", body.Error.Code, invalidTenantCode)
+		if body.Error.Code != "invalid_tenant" {
+			t.Errorf("code = %q, want %q", body.Error.Code, "invalid_tenant")
 		}
-		if body.Error.Message != invalidTenantMessage {
-			t.Errorf("message = %q, want %q", body.Error.Message, invalidTenantMessage)
+		if body.Error.Message != "invalid tenant" {
+			t.Errorf("message = %q, want %q", body.Error.Message, "invalid tenant")
 		}
 		if strings.Contains(body.Error.Message, "custom resolver failure") {
 			t.Errorf("message = %q, should not expose resolver details", body.Error.Message)
@@ -509,7 +510,7 @@ func TestMiddleware(t *testing.T) {
 			t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 		}
 
-		var body tenantErrorResponse
+		var body apperr.ErrorResponse
 		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 			t.Fatalf("decode error response: %v", err)
 		}
@@ -578,7 +579,7 @@ func TestMiddleware(t *testing.T) {
 				t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
 			}
 
-			var body tenantErrorResponse
+			var body apperr.ErrorResponse
 			if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 				t.Fatalf("decode error response: %v", err)
 			}
@@ -609,7 +610,7 @@ func TestRequireMiddleware(t *testing.T) {
 			t.Errorf("Content-Type = %q, want %q", ct, "application/json")
 		}
 
-		var body tenantErrorResponse
+		var body apperr.ErrorResponse
 		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 			t.Fatalf("decode error response: %v", err)
 		}
@@ -700,7 +701,7 @@ func TestRequireMiddleware(t *testing.T) {
 
 		handler.ServeHTTP(rec, req)
 
-		var body tenantErrorResponse
+		var body apperr.ErrorResponse
 		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 			t.Fatalf("decode error response: %v", err)
 		}
