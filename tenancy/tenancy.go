@@ -22,6 +22,11 @@ type Tenant struct {
 	Slug string
 }
 
+const (
+	tenantRequiredMessage = "tenant is required"
+	invalidTenantMessage  = "invalid tenant"
+)
+
 type tenantKey struct{}
 
 // WithTenant returns a new context with the given tenant attached.
@@ -42,7 +47,7 @@ func FromContext(ctx context.Context) (Tenant, bool) {
 // for handlers and code paths that require a tenant to proceed.
 func Require(ctx context.Context) (Tenant, error) {
 	tenant, ok := FromContext(ctx)
-	if !ok {
+	if !ok || !usableTenant(tenant) {
 		return Tenant{}, fmt.Errorf("grove: tenant is required but was not found in context")
 	}
 	return tenant, nil
@@ -130,7 +135,7 @@ func Middleware(resolver Resolver) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			tenant, found, err := resolver.ResolveTenant(r)
 			if err != nil {
-				writeTenantError(w, r, http.StatusBadRequest, err.Error())
+				writeTenantError(w, r, http.StatusBadRequest, invalidTenantMessage)
 				return
 			}
 			if found {
@@ -155,15 +160,17 @@ func Middleware(resolver Resolver) func(http.Handler) http.Handler {
 func RequireMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			_, ok := FromContext(r.Context())
-			if !ok {
-				writeTenantError(w, r, http.StatusUnprocessableEntity,
-					"grove: tenant is required but was not found in context")
+			if _, err := Require(r.Context()); err != nil {
+				writeTenantError(w, r, http.StatusUnprocessableEntity, tenantRequiredMessage)
 				return
 			}
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func usableTenant(tenant Tenant) bool {
+	return strings.TrimSpace(tenant.ID) != "" && strings.TrimSpace(tenant.Slug) != ""
 }
 
 // tenantErrorResponse is the JSON structure for framework-generated tenant

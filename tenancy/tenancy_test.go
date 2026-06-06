@@ -456,8 +456,11 @@ func TestMiddleware(t *testing.T) {
 		if body.Error.Code != "tenant_required" {
 			t.Errorf("code = %q, want %q", body.Error.Code, "tenant_required")
 		}
-		if !strings.Contains(body.Error.Message, "X-Tenant-Slug is missing") {
-			t.Errorf("message = %q, want to contain 'X-Tenant-Slug is missing'", body.Error.Message)
+		if body.Error.Message != invalidTenantMessage {
+			t.Errorf("message = %q, want %q", body.Error.Message, invalidTenantMessage)
+		}
+		if strings.Contains(body.Error.Message, "X-Tenant-Slug") {
+			t.Errorf("message = %q, should not expose resolver details", body.Error.Message)
 		}
 	})
 
@@ -483,8 +486,11 @@ func TestMiddleware(t *testing.T) {
 		if body.Error.Code != "tenant_required" {
 			t.Errorf("code = %q, want %q", body.Error.Code, "tenant_required")
 		}
-		if !strings.Contains(body.Error.Message, "custom resolver failure") {
-			t.Errorf("message = %q, want to contain 'custom resolver failure'", body.Error.Message)
+		if body.Error.Message != invalidTenantMessage {
+			t.Errorf("message = %q, want %q", body.Error.Message, invalidTenantMessage)
+		}
+		if strings.Contains(body.Error.Message, "custom resolver failure") {
+			t.Errorf("message = %q, should not expose resolver details", body.Error.Message)
 		}
 	})
 
@@ -615,7 +621,7 @@ func TestRequireMiddleware(t *testing.T) {
 		}
 	})
 
-	t.Run("allows request when tenant is in context", func(t *testing.T) {
+	t.Run("allows request when usable tenant is in context", func(t *testing.T) {
 		var capturedTenantID string
 		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			tenant, ok := FromContext(r.Context())
@@ -630,7 +636,7 @@ func TestRequireMiddleware(t *testing.T) {
 		handler := RequireMiddleware()(next)
 
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)
-		ctx := context.WithValue(req.Context(), tenantKey{}, Tenant{ID: "t1", Slug: "acme"})
+		ctx := WithTenant(req.Context(), Tenant{ID: "t1", Slug: "acme"})
 		req = req.WithContext(ctx)
 		rec := httptest.NewRecorder()
 
@@ -645,8 +651,6 @@ func TestRequireMiddleware(t *testing.T) {
 	})
 
 	t.Run("fails closed with empty tenant ID", func(t *testing.T) {
-		// Even if someone stores a zero-value Tenant in context, it still counts.
-		// This is a design decision: presence in context is what matters.
 		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			t.Error("next handler should not be called")
 		})
@@ -654,12 +658,32 @@ func TestRequireMiddleware(t *testing.T) {
 		handler := RequireMiddleware()(next)
 
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req = req.WithContext(WithTenant(req.Context(), Tenant{Slug: "acme"}))
 		rec := httptest.NewRecorder()
 
 		handler.ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusUnprocessableEntity {
 			t.Fatalf("status = %d, want %d (should fail closed with no tenant)",
+				rec.Code, http.StatusUnprocessableEntity)
+		}
+	})
+
+	t.Run("fails closed with empty tenant slug", func(t *testing.T) {
+		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Error("next handler should not be called")
+		})
+
+		handler := RequireMiddleware()(next)
+
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req = req.WithContext(WithTenant(req.Context(), Tenant{ID: "t1"}))
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("status = %d, want %d (should fail closed with no tenant slug)",
 				rec.Code, http.StatusUnprocessableEntity)
 		}
 	})
