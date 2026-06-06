@@ -134,6 +134,68 @@ func TestRequire(t *testing.T) {
 			t.Errorf("error = %q, want to contain 'grove:' prefix", msg)
 		}
 	})
+
+	t.Run("returns error when tenant has empty ID", func(t *testing.T) {
+		tenant := Tenant{ID: "", Slug: "acme"}
+		ctx := WithTenant(context.Background(), tenant)
+
+		_, err := Require(ctx)
+		if err == nil {
+			t.Fatal("expected error when tenant has empty ID")
+		}
+		if !strings.Contains(err.Error(), "tenant is required") {
+			t.Errorf("error = %q, want to contain 'tenant is required'", err.Error())
+		}
+	})
+
+	t.Run("returns error when tenant has empty Slug", func(t *testing.T) {
+		tenant := Tenant{ID: "t1", Slug: ""}
+		ctx := WithTenant(context.Background(), tenant)
+
+		_, err := Require(ctx)
+		if err == nil {
+			t.Fatal("expected error when tenant has empty Slug")
+		}
+		if !strings.Contains(err.Error(), "tenant is required") {
+			t.Errorf("error = %q, want to contain 'tenant is required'", err.Error())
+		}
+	})
+
+	t.Run("returns error when tenant has whitespace-only ID", func(t *testing.T) {
+		tenant := Tenant{ID: "  \t", Slug: "acme"}
+		ctx := WithTenant(context.Background(), tenant)
+
+		_, err := Require(ctx)
+		if err == nil {
+			t.Fatal("expected error when tenant has whitespace-only ID")
+		}
+		if !strings.Contains(err.Error(), "tenant is required") {
+			t.Errorf("error = %q, want to contain 'tenant is required'", err.Error())
+		}
+	})
+
+	t.Run("returns error when tenant has whitespace-only Slug", func(t *testing.T) {
+		tenant := Tenant{ID: "t1", Slug: "  "}
+		ctx := WithTenant(context.Background(), tenant)
+
+		_, err := Require(ctx)
+		if err == nil {
+			t.Fatal("expected error when tenant has whitespace-only Slug")
+		}
+		if !strings.Contains(err.Error(), "tenant is required") {
+			t.Errorf("error = %q, want to contain 'tenant is required'", err.Error())
+		}
+	})
+
+	t.Run("returns error when both fields are empty", func(t *testing.T) {
+		tenant := Tenant{ID: "", Slug: ""}
+		ctx := WithTenant(context.Background(), tenant)
+
+		_, err := Require(ctx)
+		if err == nil {
+			t.Fatal("expected error when both tenant fields are empty")
+		}
+	})
 }
 
 func TestResolverInterface(t *testing.T) {
@@ -539,6 +601,105 @@ func TestMiddleware(t *testing.T) {
 		}
 		if _, exists := errObj["request_id"]; exists {
 			t.Error("request_id should be omitted when not present")
+		}
+	})
+
+	t.Run("preserves existing tenant when resolver does not find one", func(t *testing.T) {
+		// If a tenant was already in context (e.g. set by prior middleware) and
+		// the resolver does not find a tenant, the existing one should remain.
+		existing := Tenant{ID: "existing-id", Slug: "existing-slug"}
+		var capturedTenant Tenant
+		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var ok bool
+			capturedTenant, ok = FromContext(r.Context())
+			if !ok {
+				t.Error("expected tenant in context")
+			}
+			w.WriteHeader(http.StatusOK)
+		})
+
+		handler := Middleware(HeaderResolver{})(next)
+
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		// No tenant headers, so resolver won't find one
+		req = req.WithContext(WithTenant(req.Context(), existing))
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+		}
+		if capturedTenant.ID != "existing-id" {
+			t.Errorf("tenant ID = %q, want %q", capturedTenant.ID, "existing-id")
+		}
+		if capturedTenant.Slug != "existing-slug" {
+			t.Errorf("tenant Slug = %q, want %q", capturedTenant.Slug, "existing-slug")
+		}
+	})
+
+	t.Run("overwrites existing tenant when resolver finds one", func(t *testing.T) {
+		// If a tenant was already in context and the resolver finds a different
+		// tenant, the new one should overwrite it.
+		existing := Tenant{ID: "old-id", Slug: "old-slug"}
+		var capturedTenant Tenant
+		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var ok bool
+			capturedTenant, ok = FromContext(r.Context())
+			if !ok {
+				t.Error("expected tenant in context")
+			}
+			w.WriteHeader(http.StatusOK)
+		})
+
+		handler := Middleware(HeaderResolver{})(next)
+
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req.Header.Set("X-Tenant-ID", "new-id")
+		req.Header.Set("X-Tenant-Slug", "new-slug")
+		req = req.WithContext(WithTenant(req.Context(), existing))
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+		}
+		if capturedTenant.ID != "new-id" {
+			t.Errorf("tenant ID = %q, want %q", capturedTenant.ID, "new-id")
+		}
+		if capturedTenant.Slug != "new-slug" {
+			t.Errorf("tenant Slug = %q, want %q", capturedTenant.Slug, "new-slug")
+		}
+	})
+
+	t.Run("RequireMiddleware before Middleware rejects when no tenant in context", func(t *testing.T) {
+		// Wrong middleware order: RequireMiddleware runs before Middleware.
+		// Since no tenant is in context yet, RequireMiddleware should reject.
+		inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Error("handler should not be called")
+		})
+
+		// Build in wrong order: RequireMiddleware first, then Middleware
+		stack := Middleware(HeaderResolver{})(RequireMiddleware()(inner))
+
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		// No tenant headers
+		rec := httptest.NewRecorder()
+
+		stack.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("status = %d, want %d (RequireMiddleware should reject before Middleware resolves)",
+				rec.Code, http.StatusUnprocessableEntity)
+		}
+
+		var body apperr.ErrorResponse
+		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+			t.Fatalf("decode error response: %v", err)
+		}
+		if body.Error.Code != "tenant_required" {
+			t.Errorf("code = %q, want %q", body.Error.Code, "tenant_required")
 		}
 	})
 
