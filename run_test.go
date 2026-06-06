@@ -1315,7 +1315,7 @@ func TestRun_NoHTTP(t *testing.T) {
 
 func TestWithTenancy(t *testing.T) {
 	t.Run("enables tenancy capability", func(t *testing.T) {
-		app, err := NewApp("test", WithHTTP(), WithTenancy(tenancy.HeaderResolver{}))
+		app, err := NewApp("test", WithHTTP(), WithTenancy())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1325,7 +1325,7 @@ func TestWithTenancy(t *testing.T) {
 	})
 
 	t.Run("succeeds when HTTP is also enabled", func(t *testing.T) {
-		app, err := NewApp("test", WithHTTP(), WithTenancy(tenancy.HeaderResolver{}))
+		app, err := NewApp("test", WithHTTP(), WithTenancy())
 		if err != nil {
 			t.Fatalf("expected no error when HTTP is enabled, got: %v", err)
 		}
@@ -1335,7 +1335,7 @@ func TestWithTenancy(t *testing.T) {
 	})
 
 	t.Run("fails when HTTP is not enabled", func(t *testing.T) {
-		_, err := NewApp("test", WithTenancy(tenancy.HeaderResolver{}))
+		_, err := NewApp("test", WithTenancy())
 		if err == nil {
 			t.Fatal("expected error when WithTenancy is used without WithHTTP")
 		}
@@ -1349,7 +1349,7 @@ func TestWithTenancy(t *testing.T) {
 
 	t.Run("fails with clear error via Run", func(t *testing.T) {
 		m := testModule{name: "tenancy-no-http"}
-		err := Run(context.Background(), m, WithTenancy(tenancy.HeaderResolver{}))
+		err := Run(context.Background(), m, WithTenancy())
 		if err == nil {
 			t.Fatal("expected error when WithTenancy is used without WithHTTP")
 		}
@@ -1361,21 +1361,11 @@ func TestWithTenancy(t *testing.T) {
 		}
 	})
 
-	t.Run("returns error when resolver is nil", func(t *testing.T) {
-		_, err := NewApp("test", WithHTTP(), WithTenancy(nil))
-		if err == nil {
-			t.Fatal("expected error when resolver is nil")
-		}
-		if !strings.Contains(err.Error(), "non-nil Resolver") {
-			t.Errorf("error = %q, want to contain 'non-nil Resolver'", err.Error())
-		}
-	})
-
 	t.Run("is idempotent", func(t *testing.T) {
 		app, err := NewApp("test",
 			WithHTTP(),
-			WithTenancy(tenancy.HeaderResolver{}),
-			WithTenancy(tenancy.HeaderResolver{}),
+			WithTenancy(),
+			WithTenancy(),
 		)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -1388,7 +1378,7 @@ func TestWithTenancy(t *testing.T) {
 
 func TestWithTenancy_MiddlewareWired(t *testing.T) {
 	t.Run("tenant middleware is wired into HTTP stack", func(t *testing.T) {
-		app, err := NewApp("test", WithHTTP(), WithTenancy(tenancy.HeaderResolver{}))
+		app, err := NewApp("test", WithHTTP(), WithTenancy())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1422,7 +1412,7 @@ func TestWithTenancy_MiddlewareWired(t *testing.T) {
 	})
 
 	t.Run("tenant middleware works with RequireMiddleware on route groups", func(t *testing.T) {
-		app, err := NewApp("test", WithHTTP(), WithTenancy(tenancy.HeaderResolver{}))
+		app, err := NewApp("test", WithHTTP(), WithTenancy())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1487,7 +1477,7 @@ func TestWithTenancy_MiddlewareWired(t *testing.T) {
 	})
 
 	t.Run("non-tenant routes still work", func(t *testing.T) {
-		app, err := NewApp("test", WithHTTP(), WithTenancy(tenancy.HeaderResolver{}))
+		app, err := NewApp("test", WithHTTP(), WithTenancy())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
