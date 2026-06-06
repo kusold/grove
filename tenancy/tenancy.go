@@ -23,6 +23,8 @@ type Tenant struct {
 }
 
 const (
+	tenantRequiredCode    = "tenant_required"
+	invalidTenantCode     = "invalid_tenant"
 	tenantRequiredMessage = "tenant is required"
 	invalidTenantMessage  = "invalid tenant"
 )
@@ -135,7 +137,7 @@ func Middleware(resolver Resolver) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			tenant, found, err := resolver.ResolveTenant(r)
 			if err != nil {
-				writeTenantError(w, r, http.StatusBadRequest, invalidTenantMessage)
+				writeTenantError(w, r, http.StatusBadRequest, invalidTenantCode, invalidTenantMessage)
 				return
 			}
 			if found {
@@ -161,7 +163,7 @@ func RequireMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if _, err := Require(r.Context()); err != nil {
-				writeTenantError(w, r, http.StatusUnprocessableEntity, tenantRequiredMessage)
+				writeTenantError(w, r, http.StatusUnprocessableEntity, tenantRequiredCode, tenantRequiredMessage)
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -194,7 +196,7 @@ type tenantErrorDetail struct {
 // writeTenantError writes a JSON error response for tenant-related failures.
 // It sets Content-Type to application/json and includes a request ID in the
 // response if one is present in the context.
-func writeTenantError(w http.ResponseWriter, r *http.Request, statusCode int, message string) {
+func writeTenantError(w http.ResponseWriter, r *http.Request, statusCode int, code, message string) {
 	var requestID string
 	if id, ok := httpx.RequestIDFromContext(r.Context()); ok {
 		requestID = id
@@ -202,7 +204,7 @@ func writeTenantError(w http.ResponseWriter, r *http.Request, statusCode int, me
 
 	resp := tenantErrorResponse{
 		Error: tenantErrorDetail{
-			Code:      "tenant_required",
+			Code:      code,
 			Message:   message,
 			RequestID: requestID,
 		},
