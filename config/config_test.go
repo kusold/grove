@@ -4,7 +4,19 @@ import "testing"
 
 func clearConfigEnv(t *testing.T) {
 	t.Helper()
-	for _, key := range []string{"SERVICE_NAME", "SERVICE_ENV", "SERVICE_VERSION", "HTTP_ADDR", "LOG_FORMAT", "LOG_COLOR"} {
+	for _, key := range []string{
+		"SERVICE_NAME",
+		"SERVICE_ENV",
+		"SERVICE_VERSION",
+		"HTTP_ADDR",
+		"HTTP_SHUTDOWN_TIMEOUT",
+		"DATABASE_URL",
+		"DATABASE_MAX_CONNS",
+		"DATABASE_MIN_CONNS",
+		"DATABASE_CONNECT_TIMEOUT",
+		"LOG_FORMAT",
+		"LOG_COLOR",
+	} {
 		t.Setenv(key, "")
 	}
 }
@@ -87,6 +99,11 @@ func TestLoad(t *testing.T) {
 		t.Setenv("SERVICE_ENV", "staging")
 		t.Setenv("SERVICE_VERSION", "v2.0.0")
 		t.Setenv("HTTP_ADDR", ":3000")
+		t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "20s")
+		t.Setenv("DATABASE_URL", "postgres://localhost/app")
+		t.Setenv("DATABASE_MAX_CONNS", "20")
+		t.Setenv("DATABASE_MIN_CONNS", "2")
+		t.Setenv("DATABASE_CONNECT_TIMEOUT", "7s")
 		t.Setenv("LOG_FORMAT", "json")
 
 		cfg := Load("unused-module-name")
@@ -101,6 +118,21 @@ func TestLoad(t *testing.T) {
 		}
 		if cfg.HTTP().Addr != ":3000" {
 			t.Errorf("HTTP.Addr = %q, want %q", cfg.HTTP().Addr, ":3000")
+		}
+		if cfg.HTTP().ShutdownTimeout != "20s" {
+			t.Errorf("HTTP.ShutdownTimeout = %q, want %q", cfg.HTTP().ShutdownTimeout, "20s")
+		}
+		if cfg.Database().URL != "postgres://localhost/app" {
+			t.Errorf("Database.URL = %q, want %q", cfg.Database().URL, "postgres://localhost/app")
+		}
+		if cfg.Database().MaxConns != "20" {
+			t.Errorf("Database.MaxConns = %q, want %q", cfg.Database().MaxConns, "20")
+		}
+		if cfg.Database().MinConns != "2" {
+			t.Errorf("Database.MinConns = %q, want %q", cfg.Database().MinConns, "2")
+		}
+		if cfg.Database().ConnectTimeout != "7s" {
+			t.Errorf("Database.ConnectTimeout = %q, want %q", cfg.Database().ConnectTimeout, "7s")
 		}
 		if cfg.Logger().Format != "json" {
 			t.Errorf("Logger.Format = %q, want %q", cfg.Logger().Format, "json")
@@ -166,24 +198,38 @@ func TestLoggerConfig(t *testing.T) {
 	})
 }
 
-func TestEnvOr(t *testing.T) {
-	t.Run("returns env value when set", func(t *testing.T) {
-		t.Setenv("TEST_KEY", "value")
-		if got := envOr("TEST_KEY", "fallback"); got != "value" {
-			t.Errorf("envOr() = %q, want %q", got, "value")
+func TestDatabaseConfig(t *testing.T) {
+	t.Run("defaults database pool settings", func(t *testing.T) {
+		clearConfigEnv(t)
+		cfg := Load("test")
+		if cfg.Database().URL != "" {
+			t.Errorf("Database.URL = %q, want empty default", cfg.Database().URL)
+		}
+		if cfg.Database().MaxConns != "10" {
+			t.Errorf("Database.MaxConns = %q, want %q", cfg.Database().MaxConns, "10")
+		}
+		if cfg.Database().MinConns != "0" {
+			t.Errorf("Database.MinConns = %q, want %q", cfg.Database().MinConns, "0")
+		}
+		if cfg.Database().ConnectTimeout != "5s" {
+			t.Errorf("Database.ConnectTimeout = %q, want %q", cfg.Database().ConnectTimeout, "5s")
 		}
 	})
 
-	t.Run("returns fallback when not set", func(t *testing.T) {
-		if got := envOr("UNSET_TEST_KEY_XYZ", "fallback"); got != "fallback" {
-			t.Errorf("envOr() = %q, want %q", got, "fallback")
+	t.Run("empty database env vars are treated as unset", func(t *testing.T) {
+		clearConfigEnv(t)
+		t.Setenv("DATABASE_MAX_CONNS", "")
+		t.Setenv("DATABASE_MIN_CONNS", "")
+		t.Setenv("DATABASE_CONNECT_TIMEOUT", "")
+		cfg := Load("test")
+		if cfg.Database().MaxConns != "10" {
+			t.Errorf("Database.MaxConns = %q, want %q", cfg.Database().MaxConns, "10")
 		}
-	})
-
-	t.Run("returns fallback when set to empty string", func(t *testing.T) {
-		t.Setenv("TEST_EMPTY_KEY", "")
-		if got := envOr("TEST_EMPTY_KEY", "fallback"); got != "fallback" {
-			t.Errorf("envOr() = %q, want %q for empty env var", got, "fallback")
+		if cfg.Database().MinConns != "0" {
+			t.Errorf("Database.MinConns = %q, want %q", cfg.Database().MinConns, "0")
+		}
+		if cfg.Database().ConnectTimeout != "5s" {
+			t.Errorf("Database.ConnectTimeout = %q, want %q", cfg.Database().ConnectTimeout, "5s")
 		}
 	})
 }
