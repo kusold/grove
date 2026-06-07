@@ -8,6 +8,10 @@
 //	SERVICE_ENV      — deployment environment (default: "development")
 //	SERVICE_VERSION  — service version string (default: "dev")
 //	HTTP_ADDR        — listen address for the HTTP server (default: ":8080")
+//	DATABASE_URL     — Postgres connection URL (default: none)
+//	DATABASE_MAX_CONNS — maximum pgx pool connections (default: "10")
+//	DATABASE_MIN_CONNS — minimum pgx pool connections (default: "0")
+//	DATABASE_CONNECT_TIMEOUT — Postgres connection timeout (default: "5s")
 //	LOG_FORMAT       — log output format: "text" or "json" (default: "text")
 //	LOG_COLOR        — colorize text output: "on", "off", or "auto" (default: "auto")
 //
@@ -18,13 +22,19 @@
 // deployment.
 package config
 
-import "os"
+import (
+	"os"
+	"strings"
+
+	env "github.com/caarlos0/env/v11"
+)
 
 // Provider exposes Grove service configuration without requiring callers to
 // depend on a concrete config source.
 type Provider interface {
 	Service() ServiceConfig
 	HTTP() HTTPConfig
+	Database() DatabaseConfig
 	Logger() LoggerConfig
 }
 
@@ -32,6 +42,7 @@ type Provider interface {
 type Config struct {
 	service ServiceConfig
 	http    HTTPConfig
+	db      DatabaseConfig
 	logger  LoggerConfig
 }
 
@@ -42,38 +53,58 @@ type ServiceConfig struct {
 	// Name is the runtime service name. If SERVICE_NAME is set, it overrides
 	// the name derived from Module.Name(). If SERVICE_NAME is empty, the
 	// module name is used as the runtime name.
-	Name string
+	Name string `env:"NAME"`
 
 	// Environment is the deployment environment (e.g. "development",
 	// "staging", "production").
-	Environment string
+	Environment string `env:"ENV" envDefault:"development"`
 
 	// Version is the service version string, typically set by the build
 	// pipeline.
-	Version string
+	Version string `env:"VERSION" envDefault:"dev"`
 }
 
 // HTTPConfig holds HTTP server configuration.
 type HTTPConfig struct {
 	// Addr is the listen address for the HTTP server (e.g. ":8080").
-	Addr string
+	Addr string `env:"ADDR" envDefault:":8080"`
 
 	// ShutdownTimeout is the maximum duration to wait for the HTTP server to
 	// complete in-flight requests during graceful shutdown. Defaults to "10s".
-	ShutdownTimeout string
+	ShutdownTimeout string `env:"SHUTDOWN_TIMEOUT" envDefault:"10s"`
+}
+
+// DatabaseConfig holds Postgres database configuration as loaded from the
+// environment. The db package parses and validates these values for pgx.
+type DatabaseConfig struct {
+	// URL is the Postgres connection URL. It is required when the Postgres
+	// capability connects to the database.
+	URL string `env:"URL"`
+
+	// MaxConns is the maximum number of connections in the pgx pool. Defaults
+	// to "10".
+	MaxConns string `env:"MAX_CONNS" envDefault:"10"`
+
+	// MinConns is the minimum number of connections in the pgx pool. Defaults
+	// to "0".
+	MinConns string `env:"MIN_CONNS" envDefault:"0"`
+
+	// ConnectTimeout is the timeout for establishing a Postgres connection.
+	// Defaults to "5s".
+	ConnectTimeout string `env:"CONNECT_TIMEOUT" envDefault:"5s"`
 }
 
 // LoggerConfig holds logger configuration.
 type LoggerConfig struct {
 	// Format controls the log output format. Valid values are "text" and "json".
 	// Defaults to "text".
-	Format string
+	Format string `env:"FORMAT" envDefault:"text"`
 
 	// Color controls ANSI colorization of text log output. Valid values are
 	// "on" (always colorize), "off" (never colorize), and "auto" (colorize only
 	// when output is a terminal). Defaults to "auto". Colorization is only
 	// applied when Format is "text".
-	Color string
+	Color string `env:"COLOR" envDefault:"auto"`
 }
 
 // Load reads configuration from environment variables. It applies sensible
@@ -82,20 +113,17 @@ type LoggerConfig struct {
 // The moduleName parameter comes from Module.Name() and is used as the
 // default service name when SERVICE_NAME is not set in the environment.
 func Load(moduleName string) *Config {
+	loaded := envConfig{
+		Service: ServiceConfig{Name: moduleName},
+	}
+	if err := env.ParseWithOptions(&loaded, env.Options{Environment: nonEmptyEnvironment()}); err != nil {
+		panic(err)
+	}
 	return &Config{
-		service: ServiceConfig{
-			Name:        envOr("SERVICE_NAME", moduleName),
-			Environment: envOr("SERVICE_ENV", "development"),
-			Version:     envOr("SERVICE_VERSION", "dev"),
-		},
-		http: HTTPConfig{
-			Addr:            envOr("HTTP_ADDR", ":8080"),
-			ShutdownTimeout: envOr("HTTP_SHUTDOWN_TIMEOUT", "10s"),
-		},
-		logger: LoggerConfig{
-			Format: envOr("LOG_FORMAT", "text"),
-			Color:  envOr("LOG_COLOR", "auto"),
-		},
+		service: loaded.Service,
+		http:    loaded.HTTP,
+		db:      loaded.Database,
+		logger:  loaded.Logger,
 	}
 }
 
@@ -109,16 +137,31 @@ func (c *Config) HTTP() HTTPConfig {
 	return c.http
 }
 
+// Database returns Postgres database configuration.
+func (c *Config) Database() DatabaseConfig {
+	return c.db
+}
+
 // Logger returns logger configuration.
 func (c *Config) Logger() LoggerConfig {
 	return c.logger
 }
 
-// envOr returns the value of the environment variable named by the key, or
-// the provided fallback value if the variable is not set or empty.
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
+type envConfig struct {
+	Service  ServiceConfig  `envPrefix:"SERVICE_"`
+	HTTP     HTTPConfig     `envPrefix:"HTTP_"`
+	Database DatabaseConfig `envPrefix:"DATABASE_"`
+	Logger   LoggerConfig   `envPrefix:"LOG_"`
+}
+
+func nonEmptyEnvironment() map[string]string {
+	environment := make(map[string]string)
+	for _, pair := range os.Environ() {
+		key, value, ok := strings.Cut(pair, "=")
+		if !ok || value == "" {
+			continue
+		}
+		environment[key] = value
 	}
-	return fallback
+	return environment
 }
