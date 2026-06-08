@@ -12,6 +12,8 @@ Grove's API design.
 
 - [Implementation plan](docs/implementation-plan.md) — phased roadmap, target
   APIs, and acceptance criteria.
+- [Environment variables](docs/environment.md) — generated configuration
+  reference.
 
 ### Architecture Decision Records (ADRs)
 
