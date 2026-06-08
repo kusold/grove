@@ -50,60 +50,54 @@ var _ Provider = (*Config)(nil)
 
 // ServiceConfig holds service identity configuration.
 type ServiceConfig struct {
-	// Name is the runtime service name. If SERVICE_NAME is set, it overrides
-	// the name derived from Module.Name(). If SERVICE_NAME is empty, the
-	// module name is used as the runtime name.
+	// Runtime service name. If SERVICE_NAME is set, it overrides the name
+	// derived from Module.Name(). If SERVICE_NAME is empty, the module name is
+	// used as the runtime name.
 	Name string `env:"NAME"`
 
-	// Environment is the deployment environment (e.g. "development",
-	// "staging", "production").
+	// Deployment environment, such as "development", "staging", or
+	// "production".
 	Environment string `env:"ENV" envDefault:"development"`
 
-	// Version is the service version string, typically set by the build
-	// pipeline.
+	// Service version string, typically set by the build pipeline.
 	Version string `env:"VERSION" envDefault:"dev"`
 }
 
 // HTTPConfig holds HTTP server configuration.
 type HTTPConfig struct {
-	// Addr is the listen address for the HTTP server (e.g. ":8080").
+	// Listen address for the HTTP server, such as ":8080".
 	Addr string `env:"ADDR" envDefault:":8080"`
 
-	// ShutdownTimeout is the maximum duration to wait for the HTTP server to
-	// complete in-flight requests during graceful shutdown. Defaults to "10s".
+	// Maximum duration to wait for the HTTP server to complete in-flight
+	// requests during graceful shutdown.
 	ShutdownTimeout string `env:"SHUTDOWN_TIMEOUT" envDefault:"10s"`
 }
 
 // DatabaseConfig holds Postgres database configuration as loaded from the
 // environment. The db package parses and validates these values for pgx.
 type DatabaseConfig struct {
-	// URL is the Postgres connection URL. It is required when the Postgres
-	// capability connects to the database.
+	// Postgres connection URL. It is required when the Postgres capability
+	// connects to the database.
 	URL string `env:"URL"`
 
-	// MaxConns is the maximum number of connections in the pgx pool. Defaults
-	// to "10".
+	// Maximum number of connections in the pgx pool.
 	MaxConns string `env:"MAX_CONNS" envDefault:"10"`
 
-	// MinConns is the minimum number of connections in the pgx pool. Defaults
-	// to "0".
+	// Minimum number of connections in the pgx pool.
 	MinConns string `env:"MIN_CONNS" envDefault:"0"`
 
-	// ConnectTimeout is the timeout for establishing a Postgres connection.
-	// Defaults to "5s".
+	// Timeout for establishing a Postgres connection.
 	ConnectTimeout string `env:"CONNECT_TIMEOUT" envDefault:"5s"`
 }
 
 // LoggerConfig holds logger configuration.
 type LoggerConfig struct {
-	// Format controls the log output format. Valid values are "text" and "json".
-	// Defaults to "text".
+	// Log output format. Valid values are "text" and "json".
 	Format string `env:"FORMAT" envDefault:"text"`
 
-	// Color controls ANSI colorization of text log output. Valid values are
-	// "on" (always colorize), "off" (never colorize), and "auto" (colorize only
-	// when output is a terminal). Defaults to "auto". Colorization is only
-	// applied when Format is "text".
+	// ANSI colorization for text log output. Valid values are "on" (always
+	// colorize), "off" (never colorize), and "auto" (colorize only when output
+	// is a terminal). Colorization is only applied when Format is "text".
 	Color string `env:"COLOR" envDefault:"auto"`
 }
 
@@ -147,11 +141,19 @@ func (c *Config) Logger() LoggerConfig {
 	return c.logger
 }
 
+//go:generate go tool github.com/g4s8/envdoc -types=envConfig -output ../docs/environment.md
 type envConfig struct {
-	Service  ServiceConfig  `envPrefix:"SERVICE_"`
-	HTTP     HTTPConfig     `envPrefix:"HTTP_"`
+	// Service identity configuration.
+	Service ServiceConfig `envPrefix:"SERVICE_"`
+
+	// HTTP server configuration.
+	HTTP HTTPConfig `envPrefix:"HTTP_"`
+
+	// Postgres database configuration.
 	Database DatabaseConfig `envPrefix:"DATABASE_"`
-	Logger   LoggerConfig   `envPrefix:"LOG_"`
+
+	// Logger configuration.
+	Logger LoggerConfig `envPrefix:"LOG_"`
 }
 
 func nonEmptyEnvironment() map[string]string {
