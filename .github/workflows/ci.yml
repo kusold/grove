@@ -12,6 +12,21 @@ permissions:
   pull-requests: read
 
 jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Verify generated files are current
+        run: |
+          go generate ./...
+          git diff --exit-code
+
   build:
     runs-on: ubuntu-latest
     steps:
