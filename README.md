@@ -15,6 +15,21 @@ Grove's API design.
 - [Environment variables](docs/environment.md) — generated configuration
   reference.
 
+## Testing
+
+Fast checks should run with:
+
+```sh
+go test -short ./...
+```
+
+Integration tests use Testcontainers and must call `integrationtest.Require(t)`
+or a helper that calls it. They run during the full suite:
+
+```sh
+go test ./...
+```
+
 ### Architecture Decision Records (ADRs)
 
 Key design decisions are documented in `docs/adr/`:
