@@ -50,10 +50,17 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Test with coverage
+      - name: Test short suite with coverage
         run: |
           set -o pipefail
-          go test -race -coverprofile=coverage.out ./... | tee coverage.txt
+          packages=$(go list ./... | grep -v '^github.com/kusold/grove/internal/integrationtest$')
+          go test -short -race -coverprofile=coverage.out $packages | tee coverage.txt
+
+      - name: Verify Docker is available
+        run: docker version
+
+      - name: Test full suite with integration tests
+        run: go test -race ./...
 
       - name: Print coverage summary
         run: go tool cover -func=coverage.out
