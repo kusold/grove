@@ -141,7 +141,7 @@ func (c *Config) Logger() LoggerConfig {
 	return c.logger
 }
 
-//go:generate go tool github.com/g4s8/envdoc -types=envConfig -output ../docs/environment.md
+//go:generate sh -c "go tool github.com/g4s8/envdoc -types=envConfig -output ../docs/environment.md && perl -0pi -e 's/\\n*\\z/\\n/' ../docs/environment.md"
 type envConfig struct {
 	// Service identity configuration.
 	Service ServiceConfig `envPrefix:"SERVICE_"`
