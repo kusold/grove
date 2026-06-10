@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/kusold/grove/config"
+	"github.com/kusold/grove/db"
 	"github.com/kusold/grove/health"
 	"github.com/kusold/grove/httpx"
 	"github.com/kusold/grove/lifecycle"
@@ -21,6 +22,7 @@ type App struct {
 	lifecycle    *lifecycle.Manager
 	healthReg    *health.Registry
 	httpReg      *httpx.Registry
+	db           *db.Database
 }
 
 // Name returns the service name, derived from Module.Name().
@@ -67,6 +69,25 @@ func (a *App) HTTP() *httpx.Registry {
 		panic(err.Error())
 	}
 	return a.httpReg
+}
+
+// RequireDB returns the database handle when the Postgres capability is enabled.
+// It returns a helpful error when Postgres was not enabled via grove.WithPostgres().
+// This accessor should be used during module registration or inside handlers to
+// obtain the database connection.
+//
+// Example:
+//
+//	db, err := app.RequireDB()
+//	if err != nil {
+//	    return err
+//	}
+//	db.Pool().QueryRow(ctx, "SELECT 1")
+func (a *App) RequireDB() (*db.Database, error) {
+	if err := a.requireCapability(capPostgres); err != nil {
+		return nil, err
+	}
+	return a.db, nil
 }
 
 // hasCapability reports whether a capability is enabled.

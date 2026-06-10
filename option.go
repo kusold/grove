@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/kusold/grove/config"
+	"github.com/kusold/grove/db"
 	"github.com/kusold/grove/health"
 	"github.com/kusold/grove/httpx"
 	"github.com/kusold/grove/lifecycle"
@@ -29,8 +30,9 @@ type builder struct {
 type capability string
 
 const (
-	capHTTP    capability = "http"
-	capTenancy capability = "tenancy"
+	capHTTP     capability = "http"
+	capTenancy  capability = "tenancy"
+	capPostgres capability = "postgres"
 )
 
 // capabilityDeps maps each capability to its required dependencies.
@@ -47,20 +49,23 @@ var capabilityDeps = map[capability][]capability{
 var capabilityOrder = []capability{
 	capHTTP,
 	capTenancy,
+	capPostgres,
 }
 
 // capabilityOptionName maps each capability to the Option function name used
 // in error messages to guide users toward the fix.
 var capabilityOptionName = map[capability]string{
-	capHTTP:    "WithHTTP",
-	capTenancy: "WithTenancy",
+	capHTTP:     "WithHTTP",
+	capTenancy:  "WithTenancy",
+	capPostgres: "WithPostgres",
 }
 
 // capabilityDisplayName maps each capability to a human-readable name used in
 // error messages.
 var capabilityDisplayName = map[capability]string{
-	capHTTP:    "http",
-	capTenancy: "tenancy",
+	capHTTP:     "http",
+	capTenancy:  "tenancy",
+	capPostgres: "postgres",
 }
 
 func newBuilder(name string) *builder {
@@ -132,6 +137,11 @@ func (b *builder) buildApp() *App {
 		httpReg.Use(tenancy.Middleware(b.tenancyResolver))
 	}
 
+	var database *db.Database
+	if b.hasCapability(capPostgres) {
+		database = &db.Database{}
+	}
+
 	return &App{
 		name:         b.name,
 		capabilities: b.capabilitySet(),
@@ -140,6 +150,7 @@ func (b *builder) buildApp() *App {
 		lifecycle:    lifecycle.New(),
 		healthReg:    health.New(),
 		httpReg:      httpReg,
+		db:           database,
 	}
 }
 
@@ -367,6 +378,23 @@ func WithTenancy() Option {
 	return func(b *builder) error {
 		b.enableCapability(capTenancy)
 		b.tenancyResolver = tenancy.HeaderResolver{}
+		return nil
+	}
+}
+
+// WithPostgres enables the Postgres capability, backed by pgxpool. When
+// enabled, Grove connects to Postgres during startup and closes the pool
+// during shutdown. The database is accessible via app.RequireDB().
+//
+// Connection settings are loaded from environment variables:
+//
+//	DATABASE_URL            — Postgres connection URL (required)
+//	DATABASE_MAX_CONNS      — maximum pool connections (default: 10)
+//	DATABASE_MIN_CONNS      — minimum pool connections (default: 0)
+//	DATABASE_CONNECT_TIMEOUT — connection timeout (default: 5s)
+func WithPostgres() Option {
+	return func(b *builder) error {
+		b.enableCapability(capPostgres)
 		return nil
 	}
 }
