@@ -61,10 +61,12 @@ func Run(ctx context.Context, module Module, opts ...Option) error {
 		return fmt.Errorf("module %q registration failed: %w", module.Name(), err)
 	}
 
-	// If HTTP is not enabled, run lifecycle hooks synchronously and return.
-	// This ensures capabilities like Postgres still connect and disconnect
-	// properly even without an HTTP server.
+	// If HTTP is not enabled, there is usually nothing to start. Postgres is
+	// the exception because its capability owns a lifecycle-managed resource.
 	if !app.hasCapability(capHTTP) {
+		if !app.hasCapability(capPostgres) {
+			return nil
+		}
 		if err := app.Lifecycle().Start(ctx); err != nil {
 			return fmt.Errorf("lifecycle start: %w", err)
 		}
@@ -133,11 +135,9 @@ func wirePostgresLifecycle(app *App) {
 			if err != nil {
 				return fmt.Errorf("postgres config: %w", err)
 			}
-			database, err := db.Open(ctx, dbConfig)
-			if err != nil {
+			if err := app.db.Connect(ctx, dbConfig); err != nil {
 				return fmt.Errorf("postgres connect: %w", err)
 			}
-			app.db = database
 			app.Logger().Info("postgres connected",
 				"max_conns", dbConfig.MaxConns,
 				"min_conns", dbConfig.MinConns,
@@ -148,13 +148,6 @@ func wirePostgresLifecycle(app *App) {
 			app.db.Close()
 			app.Logger().Info("postgres pool closed")
 			return nil
-		},
-	})
-
-	app.Health().RegisterHealth(health.Check{
-		Name: "postgres",
-		Check: func(ctx context.Context) error {
-			return app.db.Ping(ctx)
 		},
 	})
 

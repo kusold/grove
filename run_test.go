@@ -38,7 +38,19 @@ func (m testModule) Register(ctx context.Context, app *App) error {
 
 func clearConfigEnv(t *testing.T) {
 	t.Helper()
-	for _, key := range []string{"SERVICE_NAME", "SERVICE_ENV", "SERVICE_VERSION", "HTTP_ADDR", "LOG_FORMAT", "LOG_COLOR", "HTTP_SHUTDOWN_TIMEOUT"} {
+	for _, key := range []string{
+		"SERVICE_NAME",
+		"SERVICE_ENV",
+		"SERVICE_VERSION",
+		"HTTP_ADDR",
+		"HTTP_SHUTDOWN_TIMEOUT",
+		"DATABASE_URL",
+		"DATABASE_MAX_CONNS",
+		"DATABASE_MIN_CONNS",
+		"DATABASE_CONNECT_TIMEOUT",
+		"LOG_FORMAT",
+		"LOG_COLOR",
+	} {
 		t.Setenv(key, "")
 	}
 }
@@ -1311,6 +1323,40 @@ func TestRun_NoHTTP(t *testing.T) {
 			t.Fatalf("Run() without HTTP returned unexpected error: %v", err)
 		}
 	})
+
+	t.Run("does not run lifecycle hooks without HTTP or Postgres capability", func(t *testing.T) {
+		clearConfigEnv(t)
+		started := false
+		stopped := false
+		m := testModule{
+			name: "no-http-lifecycle",
+			register: func(ctx context.Context, app *App) error {
+				app.Lifecycle().Append(lifecycle.Hook{
+					Name: "should-not-run",
+					Start: func(ctx context.Context) error {
+						started = true
+						return nil
+					},
+					Stop: func(ctx context.Context) error {
+						stopped = true
+						return nil
+					},
+				})
+				return nil
+			},
+		}
+
+		err := Run(context.Background(), m)
+		if err != nil {
+			t.Fatalf("Run() without HTTP returned unexpected error: %v", err)
+		}
+		if started {
+			t.Fatal("lifecycle start hook ran without HTTP or Postgres capability")
+		}
+		if stopped {
+			t.Fatal("lifecycle stop hook ran without HTTP or Postgres capability")
+		}
+	})
 }
 
 func TestWithTenancy(t *testing.T) {
@@ -1612,6 +1658,22 @@ func TestWithPostgres(t *testing.T) {
 		}
 		if database == nil {
 			t.Fatal("expected non-nil database")
+		}
+	})
+
+	t.Run("registers Postgres readiness but not liveness", func(t *testing.T) {
+		app, err := NewApp("test", WithHTTP(), WithPostgres())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		wirePostgresLifecycle(app)
+
+		if err := app.Health().IsHealthy(context.Background()); err != nil {
+			t.Fatalf("health should not depend on Postgres: %v", err)
+		}
+		if err := app.Health().IsReady(context.Background()); err == nil {
+			t.Fatal("readiness should fail before Postgres connects")
 		}
 	})
 }
