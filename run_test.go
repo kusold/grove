@@ -1525,6 +1525,97 @@ func TestWithTenancy_MiddlewareWired(t *testing.T) {
 	})
 }
 
+func TestWithPostgres(t *testing.T) {
+	t.Run("enables postgres capability", func(t *testing.T) {
+		app, err := NewApp("test", WithPostgres())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !app.hasCapability(capPostgres) {
+			t.Error("expected postgres capability to be enabled")
+		}
+	})
+
+	t.Run("is idempotent", func(t *testing.T) {
+		app, err := NewApp("test", WithPostgres(), WithPostgres())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !app.hasCapability(capPostgres) {
+			t.Error("expected postgres capability to be enabled")
+		}
+	})
+
+	t.Run("RequireDB returns error when not enabled", func(t *testing.T) {
+		app, err := NewApp("test")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		database, err := app.RequireDB()
+		if err == nil {
+			t.Fatal("expected error when RequireDB called without WithPostgres")
+		}
+		if database != nil {
+			t.Error("expected nil database when capability not enabled")
+		}
+		if !strings.Contains(err.Error(), "postgres capability is required but was not enabled") {
+			t.Errorf("error = %q, want to contain 'postgres capability is required but was not enabled'", err.Error())
+		}
+		if !strings.Contains(err.Error(), "grove.WithPostgres()") {
+			t.Errorf("error = %q, want to contain 'grove.WithPostgres()'", err.Error())
+		}
+	})
+
+	t.Run("RequireDB returns database when enabled", func(t *testing.T) {
+		app, err := NewApp("test", WithPostgres())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		database, err := app.RequireDB()
+		if err != nil {
+			t.Fatalf("unexpected error from RequireDB: %v", err)
+		}
+		if database == nil {
+			t.Fatal("expected non-nil database")
+		}
+	})
+
+	t.Run("RequireDB returns same database on each call", func(t *testing.T) {
+		app, err := NewApp("test", WithPostgres())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		db1, err := app.RequireDB()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		db2, err := app.RequireDB()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if db1 != db2 {
+			t.Error("RequireDB should return the same database each time")
+		}
+	})
+
+	t.Run("works alongside HTTP and tenancy", func(t *testing.T) {
+		app, err := NewApp("test", WithHTTP(), WithTenancy(), WithPostgres())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !app.hasCapability(capPostgres) {
+			t.Error("expected postgres capability to be enabled")
+		}
+		database, err := app.RequireDB()
+		if err != nil {
+			t.Fatalf("unexpected error from RequireDB: %v", err)
+		}
+		if database == nil {
+			t.Fatal("expected non-nil database")
+		}
+	})
+}
+
 func withCapabilityMetadata(
 	t *testing.T,
 	order []capability,

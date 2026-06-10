@@ -8,7 +8,10 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/kusold/grove/db"
+	"github.com/kusold/grove/health"
 	"github.com/kusold/grove/httpx"
+	"github.com/kusold/grove/lifecycle"
 )
 
 // Main is the primary entry point for a Grove service. It calls Run with the
@@ -46,12 +49,28 @@ func Run(ctx context.Context, module Module, opts ...Option) error {
 		return fmt.Errorf("option error: %w", err)
 	}
 
+	// Wire Postgres lifecycle hooks before module registration so that the
+	// postgres-connect hook runs before any module hooks during startup.
+	// The pool is connected during lifecycle start and closed during lifecycle
+	// stop, ensuring orderly startup and shutdown relative to other hooks.
+	if app.hasCapability(capPostgres) {
+		wirePostgresLifecycle(app)
+	}
+
 	if err := module.Register(ctx, app); err != nil {
 		return fmt.Errorf("module %q registration failed: %w", module.Name(), err)
 	}
 
-	// If HTTP is not enabled, there is nothing to start. Return immediately.
+	// If HTTP is not enabled, run lifecycle hooks synchronously and return.
+	// This ensures capabilities like Postgres still connect and disconnect
+	// properly even without an HTTP server.
 	if !app.hasCapability(capHTTP) {
+		if err := app.Lifecycle().Start(ctx); err != nil {
+			return fmt.Errorf("lifecycle start: %w", err)
+		}
+		if err := app.Lifecycle().Stop(context.WithoutCancel(ctx)); err != nil {
+			return fmt.Errorf("lifecycle stop: %w", err)
+		}
 		return nil
 	}
 
@@ -100,4 +119,49 @@ func Run(ctx context.Context, module Module, opts ...Option) error {
 
 	app.Logger().Info("shutdown complete")
 	return nil
+}
+
+// wirePostgresLifecycle registers lifecycle hooks and health checks for the
+// Postgres capability. The pool is connected during startup and closed during
+// shutdown. Health and readiness checks are registered so that /healthz and
+// /readyz reflect Postgres connectivity.
+func wirePostgresLifecycle(app *App) {
+	app.Lifecycle().Append(lifecycle.Hook{
+		Name: "postgres-connect",
+		Start: func(ctx context.Context) error {
+			dbConfig, err := db.ConfigFrom(app.Config().Database())
+			if err != nil {
+				return fmt.Errorf("postgres config: %w", err)
+			}
+			database, err := db.Open(ctx, dbConfig)
+			if err != nil {
+				return fmt.Errorf("postgres connect: %w", err)
+			}
+			app.db = database
+			app.Logger().Info("postgres connected",
+				"max_conns", dbConfig.MaxConns,
+				"min_conns", dbConfig.MinConns,
+			)
+			return nil
+		},
+		Stop: func(ctx context.Context) error {
+			app.db.Close()
+			app.Logger().Info("postgres pool closed")
+			return nil
+		},
+	})
+
+	app.Health().RegisterHealth(health.Check{
+		Name: "postgres",
+		Check: func(ctx context.Context) error {
+			return app.db.Ping(ctx)
+		},
+	})
+
+	app.Health().RegisterReadiness(health.Check{
+		Name: "postgres",
+		Check: func(ctx context.Context) error {
+			return app.db.Ping(ctx)
+		},
+	})
 }
