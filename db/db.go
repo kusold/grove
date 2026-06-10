@@ -95,22 +95,39 @@ func (c Config) PoolConfig() (*pgxpool.Config, error) {
 	return poolConfig, nil
 }
 
-// Open creates a pgx connection pool and verifies that Postgres is reachable.
+// Open creates a Database, opens its pgx connection pool, and verifies that
+// Postgres is reachable.
 func Open(ctx context.Context, cfg Config) (*Database, error) {
+	database := &Database{}
+	if err := database.Connect(ctx, cfg); err != nil {
+		return nil, err
+	}
+	return database, nil
+}
+
+// Connect opens the pgx connection pool for this Database and verifies that
+// Postgres is reachable.
+func (d *Database) Connect(ctx context.Context, cfg Config) error {
+	if d == nil {
+		return errors.New("db: database is nil")
+	}
 	poolConfig, err := cfg.PoolConfig()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
-		return nil, fmt.Errorf("create pgx pool: %w", err)
+		return fmt.Errorf("create pgx pool: %w", err)
 	}
-	database := &Database{pool: pool}
-	if err := database.Ping(ctx); err != nil {
+	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("connect postgres: %w", err)
+		return fmt.Errorf("connect postgres: %w", err)
 	}
-	return database, nil
+	if d.pool != nil {
+		d.pool.Close()
+	}
+	d.pool = pool
+	return nil
 }
 
 // Pool returns the underlying pgx connection pool.

@@ -70,6 +70,64 @@ func TestRun_PostgresLifecycle(t *testing.T) {
 		}
 	})
 
+	t.Run("initializes DB handle captured during registration", func(t *testing.T) {
+		databaseURL := integrationtest.Postgres18(t)
+		clearConfigEnv(t)
+		t.Setenv("DATABASE_URL", databaseURL)
+		t.Setenv("HTTP_ADDR", "127.0.0.1:0")
+		t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "5s")
+
+		connected := make(chan struct{})
+		m := testModule{
+			name: "pg-captured-handle-test",
+			register: func(ctx context.Context, app *App) error {
+				database, err := app.RequireDB()
+				if err != nil {
+					return err
+				}
+				app.Lifecycle().Append(lifecycle.Hook{
+					Name: "verify-captured-db",
+					Start: func(ctx context.Context) error {
+						if err := database.Ping(ctx); err != nil {
+							return err
+						}
+						close(connected)
+						return nil
+					},
+				})
+				return nil
+			},
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		runDone := make(chan error, 1)
+		go func() {
+			runDone <- Run(ctx, m, WithHTTP(), WithPostgres())
+		}()
+
+		select {
+		case <-connected:
+			// Captured DB handle was initialized successfully.
+		case err := <-runDone:
+			t.Fatalf("Run() completed before captured DB handle initialized: %v", err)
+		case <-time.After(30 * time.Second):
+			t.Fatal("captured DB handle did not initialize within timeout")
+		}
+
+		cancel()
+
+		select {
+		case err := <-runDone:
+			if err != nil {
+				t.Fatalf("Run() returned unexpected error: %v", err)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatal("Run() did not complete within timeout")
+		}
+	})
+
 	t.Run("fails when DATABASE_URL is invalid", func(t *testing.T) {
 		clearConfigEnv(t)
 		t.Setenv("DATABASE_URL", "not-a-valid-url")
@@ -193,6 +251,12 @@ func TestRun_PostgresLifecycle(t *testing.T) {
 		err := Run(context.Background(), m, WithPostgres())
 		if err != nil {
 			t.Fatalf("Run() returned unexpected error: %v", err)
+		}
+		select {
+		case <-connected:
+			// Postgres lifecycle hook ran successfully.
+		default:
+			t.Fatal("expected Postgres lifecycle hook to run without HTTP capability")
 		}
 	})
 }
