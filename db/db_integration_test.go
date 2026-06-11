@@ -12,6 +12,16 @@ import (
 	"github.com/kusold/grove/tenancy"
 )
 
+const (
+	tenantSettingID  = "11111111-1111-1111-1111-111111111111"
+	tenantLeakID     = "22222222-2222-2222-2222-222222222222"
+	tenantCommitID   = "33333333-3333-3333-3333-333333333333"
+	tenantRollbackID = "44444444-4444-4444-4444-444444444444"
+	tenantPanicID    = "55555555-5555-5555-5555-555555555555"
+	tenantAID        = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	tenantBID        = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+)
+
 func TestOpenConnectsToPostgres18(t *testing.T) {
 	databaseURL := integrationtest.Postgres18(t)
 
@@ -67,11 +77,11 @@ func setupTestDB(t *testing.T) *Database {
 		create schema if not exists grove;
 
 		create or replace function grove.current_tenant_id()
-		returns text
+		returns uuid
 		language sql
 		stable
 		as $$
-			select nullif(current_setting('app.tenant_id', true), '')
+			select nullif(current_setting('app.tenant_id', true), '')::uuid
 		$$;
 	`)
 	if err != nil {
@@ -90,7 +100,6 @@ func setupTestDB(t *testing.T) *Database {
 // Returns two values:
 //   - ownerDB: a Database connected as the superuser (for DDL)
 //   - appDB:   a Database connected as grove_app (subject to RLS)
-//   - appURL:  the connection URL for the app user
 func setupRLSTestDB(t *testing.T) (ownerDB, appDB *Database) {
 	t.Helper()
 
@@ -131,11 +140,11 @@ func setupRLSTestDB(t *testing.T) (ownerDB, appDB *Database) {
 		create schema if not exists grove;
 
 		create or replace function grove.current_tenant_id()
-		returns text
+		returns uuid
 		language sql
 		stable
 		as $$
-			select nullif(current_setting('app.tenant_id', true), '')
+			select nullif(current_setting('app.tenant_id', true), '')::uuid
 		$$;
 
 		grant usage on schema grove to grove_app;
@@ -185,7 +194,7 @@ func TestTenantTxIntegration(t *testing.T) {
 	})
 
 	t.Run("sets app.tenant_id within transaction", func(t *testing.T) {
-		tenant := tenancy.Tenant{ID: "tenant-abc", Slug: "acme"}
+		tenant := tenancy.Tenant{ID: tenantSettingID, Slug: "acme"}
 		ctx := tenancy.WithTenant(context.Background(), tenant)
 
 		var tenantID string
@@ -195,13 +204,13 @@ func TestTenantTxIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("TenantTx() returned unexpected error: %v", err)
 		}
-		if tenantID != "tenant-abc" {
-			t.Errorf("app.tenant_id = %q, want %q", tenantID, "tenant-abc")
+		if tenantID != tenantSettingID {
+			t.Errorf("app.tenant_id = %q, want %q", tenantID, tenantSettingID)
 		}
 	})
 
 	t.Run("setting does not leak outside transaction", func(t *testing.T) {
-		tenant := tenancy.Tenant{ID: "tenant-xyz", Slug: "xyz"}
+		tenant := tenancy.Tenant{ID: tenantLeakID, Slug: "xyz"}
 		ctx := tenancy.WithTenant(context.Background(), tenant)
 
 		err := database.TenantTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
@@ -226,7 +235,7 @@ func TestTenantTxIntegration(t *testing.T) {
 		// Create a test table, insert a row inside TenantTx, verify it persists.
 		_, err := database.Pool().Exec(ctx, `
 			create table test_commit (
-				id text primary key,
+				id uuid primary key,
 				value text not null
 			);
 			alter table test_commit enable row level security;
@@ -240,11 +249,11 @@ func TestTenantTxIntegration(t *testing.T) {
 			t.Fatalf("create test_commit table: %v", err)
 		}
 
-		tenant := tenancy.Tenant{ID: "commit-tenant", Slug: "commit"}
+		tenant := tenancy.Tenant{ID: tenantCommitID, Slug: "commit"}
 		tctx := tenancy.WithTenant(context.Background(), tenant)
 
 		err = database.TenantTx(tctx, func(ctx context.Context, tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, "insert into test_commit (id, value) values ($1, $2)", "commit-tenant", "hello")
+			_, err := tx.Exec(ctx, "insert into test_commit (id, value) values ($1, $2)", tenantCommitID, "hello")
 			return err
 		})
 		if err != nil {
@@ -254,7 +263,7 @@ func TestTenantTxIntegration(t *testing.T) {
 		// Verify the row exists by querying with the same tenant context.
 		err = database.TenantTx(tctx, func(ctx context.Context, tx pgx.Tx) error {
 			var value string
-			if err := tx.QueryRow(ctx, "select value from test_commit where id = $1", "commit-tenant").Scan(&value); err != nil {
+			if err := tx.QueryRow(ctx, "select value from test_commit where id = $1", tenantCommitID).Scan(&value); err != nil {
 				return fmt.Errorf("query committed row: %w", err)
 			}
 			if value != "hello" {
@@ -270,7 +279,7 @@ func TestTenantTxIntegration(t *testing.T) {
 	t.Run("rolls back on error", func(t *testing.T) {
 		_, err := database.Pool().Exec(ctx, `
 			create table test_rollback (
-				id text primary key,
+				id uuid primary key,
 				value text not null
 			);
 			alter table test_rollback enable row level security;
@@ -284,11 +293,11 @@ func TestTenantTxIntegration(t *testing.T) {
 			t.Fatalf("create test_rollback table: %v", err)
 		}
 
-		tenant := tenancy.Tenant{ID: "rollback-tenant", Slug: "rollback"}
+		tenant := tenancy.Tenant{ID: tenantRollbackID, Slug: "rollback"}
 		tctx := tenancy.WithTenant(context.Background(), tenant)
 
 		err = database.TenantTx(tctx, func(ctx context.Context, tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, "insert into test_rollback (id, value) values ($1, $2)", "rollback-tenant", "should not persist")
+			_, err := tx.Exec(ctx, "insert into test_rollback (id, value) values ($1, $2)", tenantRollbackID, "should not persist")
 			if err != nil {
 				return err
 			}
@@ -304,7 +313,7 @@ func TestTenantTxIntegration(t *testing.T) {
 		// Verify the row does not exist.
 		err = database.TenantTx(tctx, func(ctx context.Context, tx pgx.Tx) error {
 			var value string
-			err := tx.QueryRow(ctx, "select value from test_rollback where id = $1", "rollback-tenant").Scan(&value)
+			err := tx.QueryRow(ctx, "select value from test_rollback where id = $1", tenantRollbackID).Scan(&value)
 			if err == nil {
 				return fmt.Errorf("expected no row, got value = %q", value)
 			}
@@ -318,7 +327,7 @@ func TestTenantTxIntegration(t *testing.T) {
 	t.Run("rolls back on panic", func(t *testing.T) {
 		_, err := database.Pool().Exec(ctx, `
 			create table test_panic (
-				id text primary key,
+				id uuid primary key,
 				value text not null
 			);
 			alter table test_panic enable row level security;
@@ -332,7 +341,7 @@ func TestTenantTxIntegration(t *testing.T) {
 			t.Fatalf("create test_panic table: %v", err)
 		}
 
-		tenant := tenancy.Tenant{ID: "panic-tenant", Slug: "panic"}
+		tenant := tenancy.Tenant{ID: tenantPanicID, Slug: "panic"}
 		tctx := tenancy.WithTenant(context.Background(), tenant)
 
 		recovered := false
@@ -343,7 +352,7 @@ func TestTenantTxIntegration(t *testing.T) {
 				}
 			}()
 			_ = database.TenantTx(tctx, func(ctx context.Context, tx pgx.Tx) error {
-				_, err := tx.Exec(ctx, "insert into test_panic (id, value) values ($1, $2)", "panic-tenant", "should not persist")
+				_, err := tx.Exec(ctx, "insert into test_panic (id, value) values ($1, $2)", tenantPanicID, "should not persist")
 				if err != nil {
 					return err
 				}
@@ -358,7 +367,7 @@ func TestTenantTxIntegration(t *testing.T) {
 		// Verify the row does not exist.
 		err = database.TenantTx(tctx, func(ctx context.Context, tx pgx.Tx) error {
 			var value string
-			err := tx.QueryRow(ctx, "select value from test_panic where id = $1", "panic-tenant").Scan(&value)
+			err := tx.QueryRow(ctx, "select value from test_panic where id = $1", tenantPanicID).Scan(&value)
 			if err == nil {
 				return fmt.Errorf("expected no row after panic, got value = %q", value)
 			}
@@ -379,7 +388,7 @@ func TestTenantTxIntegration(t *testing.T) {
 		_, err := ownerDB.Pool().Exec(context.Background(), `
 			create table public.test_rls (
 				id text primary key,
-				tenant_id text not null,
+				tenant_id uuid not null,
 				name text not null
 			);
 			alter table public.test_rls enable row level security;
@@ -395,14 +404,14 @@ func TestTenantTxIntegration(t *testing.T) {
 			t.Fatalf("create test_rls table: %v", err)
 		}
 
-		tenantA := tenancy.Tenant{ID: "tenant-a", Slug: "a"}
-		tenantB := tenancy.Tenant{ID: "tenant-b", Slug: "b"}
+		tenantA := tenancy.Tenant{ID: tenantAID, Slug: "a"}
+		tenantB := tenancy.Tenant{ID: tenantBID, Slug: "b"}
 		ctxA := tenancy.WithTenant(context.Background(), tenantA)
 		ctxB := tenancy.WithTenant(context.Background(), tenantB)
 
 		// Insert a row for tenant A using the app user (subject to RLS).
 		err = appDB.TenantTx(ctxA, func(ctx context.Context, tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, "insert into test_rls (id, tenant_id, name) values ($1, $2, $3)", "widget-1", "tenant-a", "Tenant A Widget")
+			_, err := tx.Exec(ctx, "insert into test_rls (id, tenant_id, name) values ($1, $2, $3)", "widget-1", tenantAID, "Tenant A Widget")
 			return err
 		})
 		if err != nil {
@@ -480,7 +489,7 @@ func TestSystemTxIntegration(t *testing.T) {
 		_, err := database.Pool().Exec(ctx, `
 			create table test_system_insert (
 				id text primary key,
-				tenant_id text not null,
+				tenant_id uuid not null,
 				name text not null
 			);
 			alter table test_system_insert enable row level security;
@@ -496,11 +505,11 @@ func TestSystemTxIntegration(t *testing.T) {
 
 		// SystemTx can insert rows because the superuser bypasses RLS.
 		err = database.SystemTx(ctx, "seed test data", func(ctx context.Context, tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, "insert into test_system_insert (id, tenant_id, name) values ($1, $2, $3)", "w1", "tenant-a", "Widget A")
+			_, err := tx.Exec(ctx, "insert into test_system_insert (id, tenant_id, name) values ($1, $2, $3)", "w1", tenantAID, "Widget A")
 			if err != nil {
 				return err
 			}
-			_, err = tx.Exec(ctx, "insert into test_system_insert (id, tenant_id, name) values ($1, $2, $3)", "w2", "tenant-b", "Widget B")
+			_, err = tx.Exec(ctx, "insert into test_system_insert (id, tenant_id, name) values ($1, $2, $3)", "w2", tenantBID, "Widget B")
 			return err
 		})
 		if err != nil {
@@ -508,7 +517,7 @@ func TestSystemTxIntegration(t *testing.T) {
 		}
 
 		// Verify the rows are visible to their respective tenant transactions.
-		tenantA := tenancy.Tenant{ID: "tenant-a", Slug: "a"}
+		tenantA := tenancy.Tenant{ID: tenantAID, Slug: "a"}
 		ctxA := tenancy.WithTenant(context.Background(), tenantA)
 
 		err = database.TenantTx(ctxA, func(ctx context.Context, tx pgx.Tx) error {
