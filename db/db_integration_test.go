@@ -75,10 +75,10 @@ func setupTestDB(t *testing.T) *Database {
 	}
 	t.Cleanup(database.Close)
 
-	// Apply the Grove RLS prelude (schema + current_tenant_id function).
-	_, err = database.Pool().Exec(ctx, migrate.PreludeSQL())
+	// Apply the Grove RLS setup (schema + current_tenant_id function).
+	_, err = database.Pool().Exec(ctx, migrate.RLSSetupSQL())
 	if err != nil {
-		t.Fatalf("apply grove prelude: %v", err)
+		t.Fatalf("apply grove RLS setup: %v", err)
 	}
 
 	return database
@@ -128,13 +128,13 @@ func setupRLSTestDB(t *testing.T) (ownerDB, appDB *Database) {
 		t.Fatalf("create grove_app role: %v", err)
 	}
 
-	// Apply the Grove RLS prelude (schema + current_tenant_id function),
+	// Apply the Grove RLS setup (schema + current_tenant_id function),
 	// then grant the app user access to the schemas.
-	preludeAndGrants := migrate.PreludeSQL() + `
+	rlsSetupAndGrants := migrate.RLSSetupSQL() + `
 		grant usage on schema grove to grove_app;
 		grant usage on schema public to grove_app;
 	`
-	_, err = ownerDB.Pool().Exec(ctx, preludeAndGrants)
+	_, err = ownerDB.Pool().Exec(ctx, rlsSetupAndGrants)
 	if err != nil {
 		t.Fatalf("setup grove schema: %v", err)
 	}
