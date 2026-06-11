@@ -621,6 +621,19 @@ func TestSystemTx(t *testing.T) {
 		}
 	})
 
+	t.Run("returns error when reason is whitespace", func(t *testing.T) {
+		database := &Database{pool: &pgxpool.Pool{}}
+		err := database.SystemTx(context.Background(), " \t\n ", func(ctx context.Context, tx pgx.Tx) error {
+			return nil
+		})
+		if err == nil {
+			t.Fatal("SystemTx() should require non-empty reason")
+		}
+		if !strings.Contains(err.Error(), "non-empty reason") {
+			t.Errorf("error = %q, want non-empty reason error", err.Error())
+		}
+	})
+
 	t.Run("returns error when begin fails", func(t *testing.T) {
 		beginErr := errors.New("connection refused")
 		d := &Database{
