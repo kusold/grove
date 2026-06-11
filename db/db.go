@@ -17,8 +17,12 @@ import (
 
 // Config holds typed Postgres pool configuration for pgx.
 type Config struct {
-	// URL is the Postgres connection URL.
+	// URL is the Postgres application connection URL.
 	URL string
+
+	// AdminURL is the privileged Postgres connection URL used for SystemTx.
+	// It is optional at startup, but SystemTx requires it to be configured.
+	AdminURL string
 
 	// MaxConns is the maximum number of connections in the pgx pool.
 	MaxConns int32
@@ -40,7 +44,8 @@ type pool interface {
 
 // Database owns the pgx connection pool for a Grove service.
 type Database struct {
-	pool pool
+	pool      pool
+	adminPool pool
 }
 
 // ConfigFrom parses Grove's environment-backed database config into typed pgx
@@ -61,6 +66,7 @@ func ConfigFrom(cfg config.DatabaseConfig) (Config, error) {
 
 	parsed := Config{
 		URL:            cfg.URL,
+		AdminURL:       cfg.AdminURL,
 		MaxConns:       maxConns,
 		MinConns:       minConns,
 		ConnectTimeout: connectTimeout,
@@ -106,6 +112,18 @@ func (c Config) PoolConfig() (*pgxpool.Config, error) {
 	return poolConfig, nil
 }
 
+// AdminPoolConfig converts Grove database config into a pgxpool config for the
+// privileged system transaction pool. It returns nil when no admin URL is
+// configured.
+func (c Config) AdminPoolConfig() (*pgxpool.Config, error) {
+	if c.AdminURL == "" {
+		return nil, nil
+	}
+	adminConfig := c
+	adminConfig.URL = c.AdminURL
+	return adminConfig.PoolConfig()
+}
+
 // Open creates a Database, opens its pgx connection pool, and verifies that
 // Postgres is reachable.
 func Open(ctx context.Context, cfg Config) (*Database, error) {
@@ -126,18 +144,33 @@ func (d *Database) Connect(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	appPool, err := connectPool(ctx, poolConfig)
 	if err != nil {
-		return fmt.Errorf("create pgx pool: %w", err)
+		return err
 	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		return fmt.Errorf("connect postgres: %w", err)
+
+	var adminPool pool
+	adminPoolConfig, err := cfg.AdminPoolConfig()
+	if err != nil {
+		appPool.Close()
+		return fmt.Errorf("admin postgres config: %w", err)
 	}
+	if adminPoolConfig != nil {
+		adminPool, err = connectPool(ctx, adminPoolConfig)
+		if err != nil {
+			appPool.Close()
+			return fmt.Errorf("admin postgres connect: %w", err)
+		}
+	}
+
 	if d.pool != nil {
 		d.pool.Close()
 	}
-	d.pool = pool
+	if d.adminPool != nil {
+		d.adminPool.Close()
+	}
+	d.pool = appPool
+	d.adminPool = adminPool
 	return nil
 }
 
@@ -163,9 +196,15 @@ func (d *Database) Ping(ctx context.Context) error {
 // Close releases the underlying pgx connection pool.
 func (d *Database) Close() {
 	if d == nil || d.pool == nil {
+		if d != nil && d.adminPool != nil {
+			d.adminPool.Close()
+		}
 		return
 	}
 	d.pool.Close()
+	if d.adminPool != nil {
+		d.adminPool.Close()
+	}
 }
 
 // TenantTx executes a callback inside a Postgres transaction with the tenant
@@ -226,9 +265,9 @@ func (d *Database) TenantTx(ctx context.Context, fn func(ctx context.Context, tx
 	return nil
 }
 
-// SystemTx executes a callback inside a Postgres transaction without setting
-// a tenant context. This is for administrative or cross-tenant operations that
-// must explicitly bypass RLS.
+// SystemTx executes a callback inside a Postgres transaction on the privileged
+// admin pool without setting a tenant context. This is for administrative or
+// cross-tenant operations that must explicitly bypass RLS.
 //
 // The reason parameter is required and is logged to make tenant bypasses
 // intentional and searchable. SystemTx never sets app.tenant_id.
@@ -240,10 +279,13 @@ func (d *Database) SystemTx(ctx context.Context, reason string, fn func(ctx cont
 	if reason == "" {
 		return errors.New("db: system transaction requires a non-empty reason")
 	}
+	if d.adminPool == nil {
+		return errors.New("db: system transaction requires DATABASE_ADMIN_URL")
+	}
 
 	slog.InfoContext(ctx, "db: system transaction started", "reason", reason)
 
-	tx, err := d.pool.Begin(ctx)
+	tx, err := d.adminPool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("db: begin system transaction: %w", err)
 	}
@@ -267,6 +309,18 @@ func (d *Database) SystemTx(ctx context.Context, reason string, fn func(ctx cont
 		return fmt.Errorf("db: commit system transaction: %w", err)
 	}
 	return nil
+}
+
+func connectPool(ctx context.Context, poolConfig *pgxpool.Config) (*pgxpool.Pool, error) {
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	if err != nil {
+		return nil, fmt.Errorf("create pgx pool: %w", err)
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("connect postgres: %w", err)
+	}
+	return pool, nil
 }
 
 func parseConns(name, value string) (int32, error) {
