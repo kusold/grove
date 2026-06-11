@@ -159,7 +159,9 @@ func tableName(source Source) string {
 func sanitizeName(name string) string {
 	var b []byte
 	for _, r := range name {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+		if r >= 'A' && r <= 'Z' {
+			b = append(b, byte(r+'a'-'A'))
+		} else if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
 			b = append(b, byte(r))
 		} else {
 			b = append(b, '_')

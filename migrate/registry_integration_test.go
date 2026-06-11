@@ -303,6 +303,59 @@ func TestRegistry_ValidateIntegration(t *testing.T) {
 		}
 	})
 
+	t.Run("handles uppercase source names after run", func(t *testing.T) {
+		databaseURL := integrationtest.Postgres18(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		pool := connectPool(t, ctx, databaseURL)
+		defer pool.Close()
+
+		registry := NewRegistry()
+		err := registry.Register(Source{
+			Name: "Service123",
+			FS: fstest.MapFS{
+				"migrations/20260611210000_uppercase_source.sql": &fstest.MapFile{
+					Data: []byte(`-- +goose Up
+-- +goose StatementBegin
+create table uppercase_source_test (id int);
+-- +goose StatementEnd
+
+-- +goose Down
+-- +goose StatementBegin
+drop table if exists uppercase_source_test;
+-- +goose StatementEnd
+`),
+				},
+			},
+			Dir: "migrations",
+		})
+		if err != nil {
+			t.Fatalf("Register() returned unexpected error: %v", err)
+		}
+
+		if err := registry.Run(ctx, pool); err != nil {
+			t.Fatalf("Run() returned unexpected error: %v", err)
+		}
+		if !versionTableExists(t, ctx, pool, "service123_db_version") {
+			t.Fatal("expected lowercased service123_db_version table to exist")
+		}
+		if err := registry.Validate(ctx, pool); err != nil {
+			t.Fatalf("Validate() returned unexpected error after running uppercase source: %v", err)
+		}
+		statuses, err := registry.Status(ctx, pool)
+		if err != nil {
+			t.Fatalf("Status() returned unexpected error: %v", err)
+		}
+		serviceStatus := statuses["Service123"]
+		if len(serviceStatus) != 1 {
+			t.Fatalf("Status() returned %d entries for Service123, want 1", len(serviceStatus))
+		}
+		if serviceStatus[0].State != MigrationApplied {
+			t.Fatalf("Service123 migration state = %q, want %q", serviceStatus[0].State, MigrationApplied)
+		}
+	})
+
 	t.Run("returns error for pending service migrations", func(t *testing.T) {
 		databaseURL := integrationtest.Postgres18(t)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -494,7 +547,7 @@ func TestSanitizeName(t *testing.T) {
 		{"my.service", "my_service"},
 		{"service v2", "service_v2"},
 		{"service_v2", "service_v2"},
-		{"Service123", "Service123"},
+		{"Service123", "service123"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
