@@ -5,11 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kusold/grove/config"
+	"github.com/kusold/grove/tenancy"
 )
 
 // Config holds typed Postgres pool configuration for pgx.
@@ -152,6 +155,107 @@ func (d *Database) Close() {
 		return
 	}
 	d.pool.Close()
+}
+
+// TenantTx executes a callback inside a Postgres transaction with the tenant
+// ID set as a transaction-local session variable. This enables RLS policies
+// that filter rows by the current tenant.
+//
+// The function:
+//  1. Requires a tenant in context (fails with a clear error otherwise).
+//  2. Begins a transaction.
+//  3. Sets app.tenant_id via set_config(..., true) so the setting is local to
+//     the transaction and never leaks to other queries on the same connection.
+//  4. Executes the callback with the transaction.
+//  5. Commits on success, rolls back on error or panic.
+//
+// The setting does not persist beyond the transaction scope.
+func (d *Database) TenantTx(ctx context.Context, fn func(ctx context.Context, tx pgx.Tx) error) error {
+	if d == nil || d.pool == nil {
+		return errors.New("db: pool is not initialized")
+	}
+
+	tenant, err := tenancy.Require(ctx)
+	if err != nil {
+		return fmt.Errorf("db: tenant transaction requires a tenant in context: %w", err)
+	}
+
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("db: begin tenant transaction: %w", err)
+	}
+
+	// Set the tenant ID as a transaction-local Postgres setting. The third
+	// argument (true) ensures the setting is local to this transaction and
+	// does not leak to other queries on the same connection.
+	_, err = tx.Exec(ctx, "select set_config('app.tenant_id', $1, true)", tenant.ID)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		return fmt.Errorf("db: set tenant config: %w", err)
+	}
+
+	// Handle panics by rolling back before the panic propagates.
+	defer func() {
+		if r := recover(); r != nil {
+			_ = tx.Rollback(ctx)
+			panic(r)
+		}
+	}()
+
+	if err := fn(ctx, tx); err != nil {
+		if rbErr := tx.Rollback(ctx); rbErr != nil {
+			return fmt.Errorf("db: transaction error (%v), rollback error (%v)", err, rbErr)
+		}
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("db: commit tenant transaction: %w", err)
+	}
+	return nil
+}
+
+// SystemTx executes a callback inside a Postgres transaction without setting
+// a tenant context. This is for administrative or cross-tenant operations that
+// must explicitly bypass RLS.
+//
+// The reason parameter is required and is logged to make tenant bypasses
+// intentional and searchable. SystemTx never sets app.tenant_id.
+func (d *Database) SystemTx(ctx context.Context, reason string, fn func(ctx context.Context, tx pgx.Tx) error) error {
+	if d == nil || d.pool == nil {
+		return errors.New("db: pool is not initialized")
+	}
+
+	if reason == "" {
+		return errors.New("db: system transaction requires a non-empty reason")
+	}
+
+	slog.InfoContext(ctx, "db: system transaction started", "reason", reason)
+
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("db: begin system transaction: %w", err)
+	}
+
+	// Handle panics by rolling back before the panic propagates.
+	defer func() {
+		if r := recover(); r != nil {
+			_ = tx.Rollback(ctx)
+			panic(r)
+		}
+	}()
+
+	if err := fn(ctx, tx); err != nil {
+		if rbErr := tx.Rollback(ctx); rbErr != nil {
+			return fmt.Errorf("db: system transaction error (%v), rollback error (%v)", err, rbErr)
+		}
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("db: commit system transaction: %w", err)
+	}
+	return nil
 }
 
 func parseConns(name, value string) (int32, error) {

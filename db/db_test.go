@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kusold/grove/config"
 )
@@ -209,6 +210,88 @@ func TestOpen(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "connect postgres") {
 			t.Errorf("error = %q, want connect postgres error", err.Error())
+		}
+	})
+}
+
+func TestTenantTx(t *testing.T) {
+	t.Run("returns error when pool is not initialized", func(t *testing.T) {
+		database := &Database{}
+		err := database.TenantTx(context.Background(), func(ctx context.Context, tx pgx.Tx) error {
+			return nil
+		})
+		if err == nil {
+			t.Fatal("TenantTx() should error when pool is nil")
+		}
+		if !strings.Contains(err.Error(), "pool is not initialized") {
+			t.Errorf("error = %q, want pool initialization error", err.Error())
+		}
+	})
+
+	t.Run("returns error when database is nil", func(t *testing.T) {
+		var database *Database
+		err := database.TenantTx(context.Background(), func(ctx context.Context, tx pgx.Tx) error {
+			return nil
+		})
+		if err == nil {
+			t.Fatal("TenantTx() should error when database is nil")
+		}
+		if !strings.Contains(err.Error(), "pool is not initialized") {
+			t.Errorf("error = %q, want pool initialization error", err.Error())
+		}
+	})
+
+	t.Run("returns error when no tenant in context", func(t *testing.T) {
+		database := &Database{pool: &pgxpool.Pool{}}
+		err := database.TenantTx(context.Background(), func(ctx context.Context, tx pgx.Tx) error {
+			return nil
+		})
+		if err == nil {
+			t.Fatal("TenantTx() should error without tenant")
+		}
+		if !strings.Contains(err.Error(), "tenant") {
+			t.Errorf("error = %q, want tenant-related error", err.Error())
+		}
+	})
+}
+
+func TestSystemTx(t *testing.T) {
+	t.Run("returns error when pool is not initialized", func(t *testing.T) {
+		database := &Database{}
+		err := database.SystemTx(context.Background(), "admin task", func(ctx context.Context, tx pgx.Tx) error {
+			return nil
+		})
+		if err == nil {
+			t.Fatal("SystemTx() should error when pool is nil")
+		}
+		if !strings.Contains(err.Error(), "pool is not initialized") {
+			t.Errorf("error = %q, want pool initialization error", err.Error())
+		}
+	})
+
+	t.Run("returns error when database is nil", func(t *testing.T) {
+		var database *Database
+		err := database.SystemTx(context.Background(), "admin task", func(ctx context.Context, tx pgx.Tx) error {
+			return nil
+		})
+		if err == nil {
+			t.Fatal("SystemTx() should error when database is nil")
+		}
+		if !strings.Contains(err.Error(), "pool is not initialized") {
+			t.Errorf("error = %q, want pool initialization error", err.Error())
+		}
+	})
+
+	t.Run("returns error when reason is empty", func(t *testing.T) {
+		database := &Database{pool: &pgxpool.Pool{}}
+		err := database.SystemTx(context.Background(), "", func(ctx context.Context, tx pgx.Tx) error {
+			return nil
+		})
+		if err == nil {
+			t.Fatal("SystemTx() should require non-empty reason")
+		}
+		if !strings.Contains(err.Error(), "non-empty reason") {
+			t.Errorf("error = %q, want non-empty reason error", err.Error())
 		}
 	})
 }
