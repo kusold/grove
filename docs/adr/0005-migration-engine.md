@@ -45,8 +45,9 @@ registry. Migration ordering must be deterministic.
 3. **Small footprint.** `goose` has a minimal dependency tree. Grove should not
    carry heavy infrastructure dependencies for features it does not yet need.
 
-4. **Clear migration semantics.** `goose` uses sequential numbering for
-   migration ordering, which is easy to reason about and debug.
+4. **Clear migration semantics.** `goose` orders migrations by numeric version.
+   Grove will use timestamp versions (`YYYYMMDDHHMMSS`) so parallel branches can
+   add migrations without coordinating the next sequence number.
 
 5. **SQL-first.** `goose` treats SQL migrations as first-class. Grove services
    will primarily write SQL migrations (e.g., creating tables, enabling RLS,

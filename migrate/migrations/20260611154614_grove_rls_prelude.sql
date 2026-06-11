@@ -1,3 +1,5 @@
+-- +goose Up
+-- +goose StatementBegin
 -- Grove RLS Setup
 -- Creates the grove schema and the current_tenant_id() helper function used by
 -- Row-Level Security policies. This is the foundation for tenant-scoped data
@@ -15,3 +17,10 @@ stable
 as $$
 	select nullif(current_setting('app.tenant_id', true), '')::uuid
 $$;
+-- +goose StatementEnd
+
+-- +goose Down
+-- +goose StatementBegin
+drop function if exists grove.current_tenant_id();
+drop schema if exists grove;
+-- +goose StatementEnd
