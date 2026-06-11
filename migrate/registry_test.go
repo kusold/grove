@@ -139,7 +139,7 @@ func TestTableName(t *testing.T) {
 		{"grove", "public.grove_db_version"},
 		{"my-service", "public.my_service_db_version"},
 		{"a.b", "public.a_b_db_version"},
-		{"Service123", "public.Service123_db_version"},
+		{"Service123", "public.service123_db_version"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
