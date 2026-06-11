@@ -336,7 +336,7 @@ func appliedMigrations(ctx context.Context, db *sql.DB, qualifiedTable string) (
 	if err != nil {
 		return nil, false, fmt.Errorf("list version table: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	applied := make(map[int64]time.Time)
 	for rows.Next() {
