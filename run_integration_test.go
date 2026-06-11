@@ -328,7 +328,7 @@ func TestRun_PostgresHealthChecks(t *testing.T) {
 		}
 	})
 
-	t.Run("healthz reflects Postgres connectivity after startup", func(t *testing.T) {
+	t.Run("health remains independent of Postgres connectivity after startup", func(t *testing.T) {
 		clearConfigEnv(t)
 		t.Setenv("DATABASE_URL", databaseURL)
 		t.Setenv("HTTP_ADDR", "127.0.0.1:0")
@@ -341,7 +341,7 @@ func TestRun_PostgresHealthChecks(t *testing.T) {
 				app.Lifecycle().Append(lifecycle.Hook{
 					Name: "verify-healthy",
 					Start: func(ctx context.Context) error {
-						// After postgres connects, health should pass
+						// Postgres readiness should not make liveness depend on the database.
 						if err := app.Health().IsHealthy(ctx); err != nil {
 							return err
 						}
@@ -363,7 +363,7 @@ func TestRun_PostgresHealthChecks(t *testing.T) {
 
 		select {
 		case <-healthy:
-			// Health check passed
+			// Health remains a process liveness check.
 		case err := <-runDone:
 			t.Fatalf("Run() completed before health check: %v", err)
 		case <-time.After(30 * time.Second):
