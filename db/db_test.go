@@ -2,14 +2,71 @@ package db
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kusold/grove/config"
+	"github.com/kusold/grove/tenancy"
 )
+
+// mockPool implements the pool interface for unit testing.
+type mockPool struct {
+	beginFn func(ctx context.Context) (pgx.Tx, error)
+	pingFn  func(ctx context.Context) error
+	closed  bool
+}
+
+func (m *mockPool) Begin(ctx context.Context) (pgx.Tx, error) {
+	return m.beginFn(ctx)
+}
+
+func (m *mockPool) Ping(ctx context.Context) error {
+	if m.pingFn != nil {
+		return m.pingFn(ctx)
+	}
+	return nil
+}
+
+func (m *mockPool) Close() {
+	m.closed = true
+}
+
+// mockTx implements pgx.Tx for unit testing. Unimplemented methods
+// delegate to the embedded interface (which is nil; only methods we
+// override are called in tests).
+type mockTx struct {
+	pgx.Tx
+	execFn     func(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	rollbackFn func(ctx context.Context) error
+	commitFn   func(ctx context.Context) error
+}
+
+func (m *mockTx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	if m.execFn != nil {
+		return m.execFn(ctx, sql, args...)
+	}
+	return pgconn.CommandTag{}, nil
+}
+
+func (m *mockTx) Rollback(ctx context.Context) error {
+	if m.rollbackFn != nil {
+		return m.rollbackFn(ctx)
+	}
+	return nil
+}
+
+func (m *mockTx) Commit(ctx context.Context) error {
+	if m.commitFn != nil {
+		return m.commitFn(ctx)
+	}
+	return nil
+}
 
 func TestConfigFrom(t *testing.T) {
 	t.Run("parses database config", func(t *testing.T) {
@@ -139,6 +196,21 @@ func TestConfigFrom(t *testing.T) {
 			t.Errorf("error = %q, want min connection parse error", err.Error())
 		}
 	})
+
+	t.Run("reports invalid max connection format", func(t *testing.T) {
+		_, err := ConfigFrom(config.DatabaseConfig{
+			URL:            "postgres://localhost/app",
+			MaxConns:       "many",
+			MinConns:       "0",
+			ConnectTimeout: "5s",
+		})
+		if err == nil {
+			t.Fatal("ConfigFrom() should reject invalid max connection format")
+		}
+		if !strings.Contains(err.Error(), `invalid DATABASE_MAX_CONNS "many"`) {
+			t.Errorf("error = %q, want max connection parse error", err.Error())
+		}
+	})
 }
 
 func TestPoolConfig(t *testing.T) {
@@ -253,6 +325,216 @@ func TestTenantTx(t *testing.T) {
 			t.Errorf("error = %q, want tenant-related error", err.Error())
 		}
 	})
+
+	t.Run("returns error when begin fails", func(t *testing.T) {
+		beginErr := errors.New("connection refused")
+		d := &Database{pool: &mockPool{
+			beginFn: func(ctx context.Context) (pgx.Tx, error) {
+				return nil, beginErr
+			},
+		}}
+		tenant := tenancy.Tenant{ID: "begin-test", Slug: "test"}
+		ctx := tenancy.WithTenant(context.Background(), tenant)
+
+		err := d.TenantTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+			return nil
+		})
+		if err == nil {
+			t.Fatal("TenantTx() should return error when begin fails")
+		}
+		if !strings.Contains(err.Error(), "begin tenant transaction") {
+			t.Errorf("error = %q, want begin error", err.Error())
+		}
+	})
+
+	t.Run("returns error when set_config fails", func(t *testing.T) {
+		setConfigErr := errors.New("set_config failed")
+		var rollbackCalled bool
+		d := &Database{pool: &mockPool{
+			beginFn: func(ctx context.Context) (pgx.Tx, error) {
+				return &mockTx{
+					execFn: func(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+						return pgconn.CommandTag{}, setConfigErr
+					},
+					rollbackFn: func(ctx context.Context) error {
+						rollbackCalled = true
+						return nil
+					},
+				}, nil
+			},
+		}}
+		tenant := tenancy.Tenant{ID: "setconfig-test", Slug: "test"}
+		ctx := tenancy.WithTenant(context.Background(), tenant)
+
+		err := d.TenantTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+			return nil
+		})
+		if err == nil {
+			t.Fatal("TenantTx() should return error when set_config fails")
+		}
+		if !strings.Contains(err.Error(), "set tenant config") {
+			t.Errorf("error = %q, want set tenant config error", err.Error())
+		}
+		if !rollbackCalled {
+			t.Error("expected rollback to be called")
+		}
+	})
+
+	t.Run("commits on success", func(t *testing.T) {
+		var commitCalled bool
+		d := &Database{pool: &mockPool{
+			beginFn: func(ctx context.Context) (pgx.Tx, error) {
+				return &mockTx{
+					execFn: func(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+						return pgconn.CommandTag{}, nil
+					},
+					commitFn: func(ctx context.Context) error {
+						commitCalled = true
+						return nil
+					},
+				}, nil
+			},
+		}}
+		tenant := tenancy.Tenant{ID: "commit-test", Slug: "test"}
+		ctx := tenancy.WithTenant(context.Background(), tenant)
+
+		err := d.TenantTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("TenantTx() returned unexpected error: %v", err)
+		}
+		if !commitCalled {
+			t.Error("expected commit to be called")
+		}
+	})
+
+	t.Run("rolls back on callback error", func(t *testing.T) {
+		var rollbackCalled bool
+		d := &Database{pool: &mockPool{
+			beginFn: func(ctx context.Context) (pgx.Tx, error) {
+				return &mockTx{
+					execFn: func(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+						return pgconn.CommandTag{}, nil
+					},
+					rollbackFn: func(ctx context.Context) error {
+						rollbackCalled = true
+						return nil
+					},
+				}, nil
+			},
+		}}
+		tenant := tenancy.Tenant{ID: "rollback-test", Slug: "test"}
+		ctx := tenancy.WithTenant(context.Background(), tenant)
+
+		err := d.TenantTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+			return fmt.Errorf("callback error")
+		})
+		if err == nil {
+			t.Fatal("TenantTx() should return callback error")
+		}
+		if !strings.Contains(err.Error(), "callback error") {
+			t.Errorf("error = %q, want callback error", err.Error())
+		}
+		if !rollbackCalled {
+			t.Error("expected rollback to be called")
+		}
+	})
+
+	t.Run("returns combined error when callback and rollback both fail", func(t *testing.T) {
+		callbackErr := errors.New("callback error")
+		rollbackErr := errors.New("rollback error")
+		d := &Database{pool: &mockPool{
+			beginFn: func(ctx context.Context) (pgx.Tx, error) {
+				return &mockTx{
+					execFn: func(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+						return pgconn.CommandTag{}, nil
+					},
+					rollbackFn: func(ctx context.Context) error {
+						return rollbackErr
+					},
+				}, nil
+			},
+		}}
+		tenant := tenancy.Tenant{ID: "combined-test", Slug: "test"}
+		ctx := tenancy.WithTenant(context.Background(), tenant)
+
+		err := d.TenantTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+			return callbackErr
+		})
+		if err == nil {
+			t.Fatal("TenantTx() should return error")
+		}
+		if !strings.Contains(err.Error(), "callback error") || !strings.Contains(err.Error(), "rollback error") {
+			t.Errorf("error = %q, want both callback and rollback errors", err.Error())
+		}
+	})
+
+	t.Run("rolls back and re-panics on callback panic", func(t *testing.T) {
+		var rollbackCalled bool
+		d := &Database{pool: &mockPool{
+			beginFn: func(ctx context.Context) (pgx.Tx, error) {
+				return &mockTx{
+					execFn: func(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+						return pgconn.CommandTag{}, nil
+					},
+					rollbackFn: func(ctx context.Context) error {
+						rollbackCalled = true
+						return nil
+					},
+				}, nil
+			},
+		}}
+		tenant := tenancy.Tenant{ID: "panic-test", Slug: "test"}
+		ctx := tenancy.WithTenant(context.Background(), tenant)
+
+		recovered := false
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					recovered = true
+				}
+			}()
+			_ = d.TenantTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+				panic("deliberate panic")
+			})
+		}()
+
+		if !recovered {
+			t.Fatal("expected panic to propagate")
+		}
+		if !rollbackCalled {
+			t.Error("expected rollback to be called")
+		}
+	})
+
+	t.Run("returns error when commit fails", func(t *testing.T) {
+		commitErr := errors.New("commit failed")
+		d := &Database{pool: &mockPool{
+			beginFn: func(ctx context.Context) (pgx.Tx, error) {
+				return &mockTx{
+					execFn: func(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+						return pgconn.CommandTag{}, nil
+					},
+					commitFn: func(ctx context.Context) error {
+						return commitErr
+					},
+				}, nil
+			},
+		}}
+		tenant := tenancy.Tenant{ID: "commit-err-test", Slug: "test"}
+		ctx := tenancy.WithTenant(context.Background(), tenant)
+
+		err := d.TenantTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+			return nil
+		})
+		if err == nil {
+			t.Fatal("TenantTx() should return error when commit fails")
+		}
+		if !strings.Contains(err.Error(), "commit tenant transaction") {
+			t.Errorf("error = %q, want commit error", err.Error())
+		}
+	})
 }
 
 func TestSystemTx(t *testing.T) {
@@ -292,6 +574,156 @@ func TestSystemTx(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "non-empty reason") {
 			t.Errorf("error = %q, want non-empty reason error", err.Error())
+		}
+	})
+
+	t.Run("returns error when begin fails", func(t *testing.T) {
+		beginErr := errors.New("connection refused")
+		d := &Database{pool: &mockPool{
+			beginFn: func(ctx context.Context) (pgx.Tx, error) {
+				return nil, beginErr
+			},
+		}}
+
+		err := d.SystemTx(context.Background(), "admin task", func(ctx context.Context, tx pgx.Tx) error {
+			return nil
+		})
+		if err == nil {
+			t.Fatal("SystemTx() should return error when begin fails")
+		}
+		if !strings.Contains(err.Error(), "begin system transaction") {
+			t.Errorf("error = %q, want begin error", err.Error())
+		}
+	})
+
+	t.Run("commits on success", func(t *testing.T) {
+		var commitCalled bool
+		d := &Database{pool: &mockPool{
+			beginFn: func(ctx context.Context) (pgx.Tx, error) {
+				return &mockTx{
+					commitFn: func(ctx context.Context) error {
+						commitCalled = true
+						return nil
+					},
+				}, nil
+			},
+		}}
+
+		err := d.SystemTx(context.Background(), "admin task", func(ctx context.Context, tx pgx.Tx) error {
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("SystemTx() returned unexpected error: %v", err)
+		}
+		if !commitCalled {
+			t.Error("expected commit to be called")
+		}
+	})
+
+	t.Run("rolls back on callback error", func(t *testing.T) {
+		var rollbackCalled bool
+		d := &Database{pool: &mockPool{
+			beginFn: func(ctx context.Context) (pgx.Tx, error) {
+				return &mockTx{
+					rollbackFn: func(ctx context.Context) error {
+						rollbackCalled = true
+						return nil
+					},
+				}, nil
+			},
+		}}
+
+		err := d.SystemTx(context.Background(), "admin task", func(ctx context.Context, tx pgx.Tx) error {
+			return fmt.Errorf("callback error")
+		})
+		if err == nil {
+			t.Fatal("SystemTx() should return callback error")
+		}
+		if !strings.Contains(err.Error(), "callback error") {
+			t.Errorf("error = %q, want callback error", err.Error())
+		}
+		if !rollbackCalled {
+			t.Error("expected rollback to be called")
+		}
+	})
+
+	t.Run("returns combined error when callback and rollback both fail", func(t *testing.T) {
+		callbackErr := errors.New("callback error")
+		rollbackErr := errors.New("rollback error")
+		d := &Database{pool: &mockPool{
+			beginFn: func(ctx context.Context) (pgx.Tx, error) {
+				return &mockTx{
+					rollbackFn: func(ctx context.Context) error {
+						return rollbackErr
+					},
+				}, nil
+			},
+		}}
+
+		err := d.SystemTx(context.Background(), "admin task", func(ctx context.Context, tx pgx.Tx) error {
+			return callbackErr
+		})
+		if err == nil {
+			t.Fatal("SystemTx() should return error")
+		}
+		if !strings.Contains(err.Error(), "callback error") || !strings.Contains(err.Error(), "rollback error") {
+			t.Errorf("error = %q, want both callback and rollback errors", err.Error())
+		}
+	})
+
+	t.Run("rolls back and re-panics on callback panic", func(t *testing.T) {
+		var rollbackCalled bool
+		d := &Database{pool: &mockPool{
+			beginFn: func(ctx context.Context) (pgx.Tx, error) {
+				return &mockTx{
+					rollbackFn: func(ctx context.Context) error {
+						rollbackCalled = true
+						return nil
+					},
+				}, nil
+			},
+		}}
+
+		recovered := false
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					recovered = true
+				}
+			}()
+			_ = d.SystemTx(context.Background(), "admin task", func(ctx context.Context, tx pgx.Tx) error {
+				panic("deliberate panic")
+			})
+		}()
+
+		if !recovered {
+			t.Fatal("expected panic to propagate")
+		}
+		if !rollbackCalled {
+			t.Error("expected rollback to be called")
+		}
+	})
+
+	t.Run("returns error when commit fails", func(t *testing.T) {
+		commitErr := errors.New("commit failed")
+		d := &Database{pool: &mockPool{
+			beginFn: func(ctx context.Context) (pgx.Tx, error) {
+				return &mockTx{
+					commitFn: func(ctx context.Context) error {
+						return commitErr
+					},
+				}, nil
+			},
+		}}
+
+		err := d.SystemTx(context.Background(), "admin task", func(ctx context.Context, tx pgx.Tx) error {
+			return nil
+		})
+		if err == nil {
+			t.Fatal("SystemTx() should return error when commit fails")
+		}
+		if !strings.Contains(err.Error(), "commit system transaction") {
+			t.Errorf("error = %q, want commit error", err.Error())
 		}
 	})
 }
@@ -343,5 +775,37 @@ func TestDatabase(t *testing.T) {
 			t.Fatal("Pool() should return the underlying pool")
 		}
 		database.Close()
+	})
+
+	t.Run("pings successfully with mock pool", func(t *testing.T) {
+		d := &Database{pool: &mockPool{}}
+		if err := d.Ping(context.Background()); err != nil {
+			t.Fatalf("Ping() returned unexpected error: %v", err)
+		}
+	})
+
+	t.Run("Pool returns nil for mock pool", func(t *testing.T) {
+		d := &Database{pool: &mockPool{}}
+		if d.Pool() != nil {
+			t.Fatal("Pool() should return nil for non-pgxpool.Pool underlying pool")
+		}
+	})
+}
+
+func TestConnect(t *testing.T) {
+	t.Run("returns error when database is nil", func(t *testing.T) {
+		var d *Database
+		err := d.Connect(context.Background(), Config{
+			URL:            "postgres://localhost/app",
+			MaxConns:       10,
+			MinConns:       0,
+			ConnectTimeout: 5 * time.Second,
+		})
+		if err == nil {
+			t.Fatal("Connect() should error when database is nil")
+		}
+		if !strings.Contains(err.Error(), "database is nil") {
+			t.Errorf("error = %q, want database nil error", err.Error())
+		}
 	})
 }

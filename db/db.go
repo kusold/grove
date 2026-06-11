@@ -30,9 +30,17 @@ type Config struct {
 	ConnectTimeout time.Duration
 }
 
+// pool abstracts the pgxpool operations used by Database.
+// *pgxpool.Pool satisfies this interface.
+type pool interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
+	Ping(ctx context.Context) error
+	Close()
+}
+
 // Database owns the pgx connection pool for a Grove service.
 type Database struct {
-	pool *pgxpool.Pool
+	pool pool
 }
 
 // ConfigFrom parses Grove's environment-backed database config into typed pgx
@@ -138,7 +146,10 @@ func (d *Database) Pool() *pgxpool.Pool {
 	if d == nil {
 		return nil
 	}
-	return d.pool
+	if p, ok := d.pool.(*pgxpool.Pool); ok {
+		return p
+	}
+	return nil
 }
 
 // Ping verifies that the database is reachable.
