@@ -388,7 +388,8 @@ func WithTenancy() Option {
 //
 // Connection settings are loaded from environment variables:
 //
-//	DATABASE_URL            — Postgres connection URL (required)
+//	DATABASE_URL            — Postgres application connection URL (required)
+//	DATABASE_ADMIN_URL      — privileged URL for SystemTx (optional until used)
 //	DATABASE_MAX_CONNS      — maximum pool connections (default: 10)
 //	DATABASE_MIN_CONNS      — minimum pool connections (default: 0)
 //	DATABASE_CONNECT_TIMEOUT — connection timeout (default: 5s)

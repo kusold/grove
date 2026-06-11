@@ -14,8 +14,11 @@ used as the runtime name.
    - `HTTP_SHUTDOWN_TIMEOUT` (default: `10s`) - Maximum duration to wait for the HTTP server to complete in-flight
 requests during graceful shutdown.
  - Postgres database configuration.
-   - `DATABASE_URL` - Postgres connection URL. It is required when the Postgres capability
-connects to the database.
+   - `DATABASE_URL` - Postgres application connection URL. It is required when the Postgres
+capability connects to the database.
+   - `DATABASE_ADMIN_URL` - Privileged Postgres connection URL for system transactions that need to
+bypass tenant RLS. It is optional at startup, but required when SystemTx is
+used.
    - `DATABASE_MAX_CONNS` (default: `10`) - Maximum number of connections in the pgx pool.
    - `DATABASE_MIN_CONNS` (default: `0`) - Minimum number of connections in the pgx pool.
    - `DATABASE_CONNECT_TIMEOUT` (default: `5s`) - Timeout for establishing a Postgres connection.

@@ -30,6 +30,7 @@ func TestOpenConnectsToPostgres18(t *testing.T) {
 
 	database, err := Open(ctx, Config{
 		URL:            databaseURL,
+		AdminURL:       databaseURL,
 		MaxConns:       4,
 		MinConns:       0,
 		ConnectTimeout: 5 * time.Second,
@@ -63,6 +64,7 @@ func setupTestDB(t *testing.T) *Database {
 
 	database, err := Open(ctx, Config{
 		URL:            databaseURL,
+		AdminURL:       databaseURL,
 		MaxConns:       4,
 		MinConns:       0,
 		ConnectTimeout: 5 * time.Second,
@@ -165,6 +167,7 @@ func setupRLSTestDB(t *testing.T) (ownerDB, appDB *Database) {
 
 	appDB, err = Open(ctx, Config{
 		URL:            appURL,
+		AdminURL:       databaseURL,
 		MaxConns:       4,
 		MinConns:       0,
 		ConnectTimeout: 5 * time.Second,
@@ -444,6 +447,36 @@ func TestTenantTxIntegration(t *testing.T) {
 		})
 		if err != nil {
 			t.Fatalf("TenantTx() tenant A should see their own data: %v", err)
+		}
+
+		// App-role access outside TenantTx has no tenant setting, so RLS
+		// rejects the insert. SystemTx uses the configured admin pool and can
+		// perform the same cross-tenant/system work intentionally.
+		_, err = appDB.Pool().Exec(context.Background(), "insert into test_rls (id, tenant_id, name) values ($1, $2, $3)", "widget-system-blocked", tenantBID, "Blocked System Widget")
+		if err == nil {
+			t.Fatal("app role insert without tenant setting should fail under RLS")
+		}
+
+		err = appDB.SystemTx(context.Background(), "seed tenant B widget", func(ctx context.Context, tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, "insert into test_rls (id, tenant_id, name) values ($1, $2, $3)", "widget-system", tenantBID, "System Widget")
+			return err
+		})
+		if err != nil {
+			t.Fatalf("SystemTx() insert through admin pool: %v", err)
+		}
+
+		err = appDB.TenantTx(ctxB, func(ctx context.Context, tx pgx.Tx) error {
+			var name string
+			if err := tx.QueryRow(ctx, "select name from test_rls where id = $1", "widget-system").Scan(&name); err != nil {
+				return fmt.Errorf("tenant B should see system widget: %w", err)
+			}
+			if name != "System Widget" {
+				return fmt.Errorf("name = %q, want %q", name, "System Widget")
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("TenantTx() verify SystemTx insert: %v", err)
 		}
 	})
 }

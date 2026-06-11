@@ -72,6 +72,7 @@ func TestConfigFrom(t *testing.T) {
 	t.Run("parses database config", func(t *testing.T) {
 		cfg, err := ConfigFrom(config.DatabaseConfig{
 			URL:            "postgres://user:pass@localhost:5432/app",
+			AdminURL:       "postgres://admin:pass@localhost:5432/app",
 			MaxConns:       "12",
 			MinConns:       "2",
 			ConnectTimeout: "3s",
@@ -81,6 +82,9 @@ func TestConfigFrom(t *testing.T) {
 		}
 		if cfg.URL != "postgres://user:pass@localhost:5432/app" {
 			t.Errorf("URL = %q, want database URL", cfg.URL)
+		}
+		if cfg.AdminURL != "postgres://admin:pass@localhost:5432/app" {
+			t.Errorf("AdminURL = %q, want admin database URL", cfg.AdminURL)
 		}
 		if cfg.MaxConns != 12 {
 			t.Errorf("MaxConns = %d, want 12", cfg.MaxConns)
@@ -247,6 +251,46 @@ func TestPoolConfig(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "DATABASE_URL is required") {
 			t.Errorf("error = %q, want DATABASE_URL validation", err.Error())
+		}
+	})
+}
+
+func TestAdminPoolConfig(t *testing.T) {
+	t.Run("returns nil when admin URL is not configured", func(t *testing.T) {
+		cfg := Config{
+			URL:            "postgres://user:pass@localhost:5432/app?sslmode=disable",
+			MaxConns:       10,
+			MinConns:       1,
+			ConnectTimeout: 5 * time.Second,
+		}
+
+		poolConfig, err := cfg.AdminPoolConfig()
+		if err != nil {
+			t.Fatalf("AdminPoolConfig() returned unexpected error: %v", err)
+		}
+		if poolConfig != nil {
+			t.Fatal("AdminPoolConfig() should return nil when AdminURL is empty")
+		}
+	})
+
+	t.Run("converts admin URL to pgx pool config", func(t *testing.T) {
+		cfg := Config{
+			URL:            "postgres://user:pass@localhost:5432/app?sslmode=disable",
+			AdminURL:       "postgres://admin:pass@localhost:5432/app?sslmode=disable",
+			MaxConns:       10,
+			MinConns:       1,
+			ConnectTimeout: 5 * time.Second,
+		}
+
+		poolConfig, err := cfg.AdminPoolConfig()
+		if err != nil {
+			t.Fatalf("AdminPoolConfig() returned unexpected error: %v", err)
+		}
+		if poolConfig == nil {
+			t.Fatal("AdminPoolConfig() should return an admin pool config")
+		}
+		if poolConfig.ConnConfig.User != "admin" {
+			t.Errorf("ConnConfig.User = %q, want admin", poolConfig.ConnConfig.User)
 		}
 	})
 }
@@ -579,11 +623,14 @@ func TestSystemTx(t *testing.T) {
 
 	t.Run("returns error when begin fails", func(t *testing.T) {
 		beginErr := errors.New("connection refused")
-		d := &Database{pool: &mockPool{
-			beginFn: func(ctx context.Context) (pgx.Tx, error) {
-				return nil, beginErr
+		d := &Database{
+			pool: &mockPool{},
+			adminPool: &mockPool{
+				beginFn: func(ctx context.Context) (pgx.Tx, error) {
+					return nil, beginErr
+				},
 			},
-		}}
+		}
 
 		err := d.SystemTx(context.Background(), "admin task", func(ctx context.Context, tx pgx.Tx) error {
 			return nil
@@ -598,16 +645,19 @@ func TestSystemTx(t *testing.T) {
 
 	t.Run("commits on success", func(t *testing.T) {
 		var commitCalled bool
-		d := &Database{pool: &mockPool{
-			beginFn: func(ctx context.Context) (pgx.Tx, error) {
-				return &mockTx{
-					commitFn: func(ctx context.Context) error {
-						commitCalled = true
-						return nil
-					},
-				}, nil
+		d := &Database{
+			pool: &mockPool{},
+			adminPool: &mockPool{
+				beginFn: func(ctx context.Context) (pgx.Tx, error) {
+					return &mockTx{
+						commitFn: func(ctx context.Context) error {
+							commitCalled = true
+							return nil
+						},
+					}, nil
+				},
 			},
-		}}
+		}
 
 		err := d.SystemTx(context.Background(), "admin task", func(ctx context.Context, tx pgx.Tx) error {
 			return nil
@@ -622,16 +672,19 @@ func TestSystemTx(t *testing.T) {
 
 	t.Run("rolls back on callback error", func(t *testing.T) {
 		var rollbackCalled bool
-		d := &Database{pool: &mockPool{
-			beginFn: func(ctx context.Context) (pgx.Tx, error) {
-				return &mockTx{
-					rollbackFn: func(ctx context.Context) error {
-						rollbackCalled = true
-						return nil
-					},
-				}, nil
+		d := &Database{
+			pool: &mockPool{},
+			adminPool: &mockPool{
+				beginFn: func(ctx context.Context) (pgx.Tx, error) {
+					return &mockTx{
+						rollbackFn: func(ctx context.Context) error {
+							rollbackCalled = true
+							return nil
+						},
+					}, nil
+				},
 			},
-		}}
+		}
 
 		err := d.SystemTx(context.Background(), "admin task", func(ctx context.Context, tx pgx.Tx) error {
 			return fmt.Errorf("callback error")
@@ -650,15 +703,18 @@ func TestSystemTx(t *testing.T) {
 	t.Run("returns combined error when callback and rollback both fail", func(t *testing.T) {
 		callbackErr := errors.New("callback error")
 		rollbackErr := errors.New("rollback error")
-		d := &Database{pool: &mockPool{
-			beginFn: func(ctx context.Context) (pgx.Tx, error) {
-				return &mockTx{
-					rollbackFn: func(ctx context.Context) error {
-						return rollbackErr
-					},
-				}, nil
+		d := &Database{
+			pool: &mockPool{},
+			adminPool: &mockPool{
+				beginFn: func(ctx context.Context) (pgx.Tx, error) {
+					return &mockTx{
+						rollbackFn: func(ctx context.Context) error {
+							return rollbackErr
+						},
+					}, nil
+				},
 			},
-		}}
+		}
 
 		err := d.SystemTx(context.Background(), "admin task", func(ctx context.Context, tx pgx.Tx) error {
 			return callbackErr
@@ -673,16 +729,19 @@ func TestSystemTx(t *testing.T) {
 
 	t.Run("rolls back and re-panics on callback panic", func(t *testing.T) {
 		var rollbackCalled bool
-		d := &Database{pool: &mockPool{
-			beginFn: func(ctx context.Context) (pgx.Tx, error) {
-				return &mockTx{
-					rollbackFn: func(ctx context.Context) error {
-						rollbackCalled = true
-						return nil
-					},
-				}, nil
+		d := &Database{
+			pool: &mockPool{},
+			adminPool: &mockPool{
+				beginFn: func(ctx context.Context) (pgx.Tx, error) {
+					return &mockTx{
+						rollbackFn: func(ctx context.Context) error {
+							rollbackCalled = true
+							return nil
+						},
+					}, nil
+				},
 			},
-		}}
+		}
 
 		recovered := false
 		func() {
@@ -706,15 +765,18 @@ func TestSystemTx(t *testing.T) {
 
 	t.Run("returns error when commit fails", func(t *testing.T) {
 		commitErr := errors.New("commit failed")
-		d := &Database{pool: &mockPool{
-			beginFn: func(ctx context.Context) (pgx.Tx, error) {
-				return &mockTx{
-					commitFn: func(ctx context.Context) error {
-						return commitErr
-					},
-				}, nil
+		d := &Database{
+			pool: &mockPool{},
+			adminPool: &mockPool{
+				beginFn: func(ctx context.Context) (pgx.Tx, error) {
+					return &mockTx{
+						commitFn: func(ctx context.Context) error {
+							return commitErr
+						},
+					}, nil
+				},
 			},
-		}}
+		}
 
 		err := d.SystemTx(context.Background(), "admin task", func(ctx context.Context, tx pgx.Tx) error {
 			return nil
@@ -724,6 +786,19 @@ func TestSystemTx(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "commit system transaction") {
 			t.Errorf("error = %q, want commit error", err.Error())
+		}
+	})
+
+	t.Run("requires admin pool", func(t *testing.T) {
+		database := &Database{pool: &mockPool{}}
+		err := database.SystemTx(context.Background(), "admin task", func(ctx context.Context, tx pgx.Tx) error {
+			return nil
+		})
+		if err == nil {
+			t.Fatal("SystemTx() should require admin pool")
+		}
+		if !strings.Contains(err.Error(), "DATABASE_ADMIN_URL") {
+			t.Errorf("error = %q, want DATABASE_ADMIN_URL error", err.Error())
 		}
 	})
 }
@@ -788,6 +863,21 @@ func TestDatabase(t *testing.T) {
 		d := &Database{pool: &mockPool{}}
 		if d.Pool() != nil {
 			t.Fatal("Pool() should return nil for non-pgxpool.Pool underlying pool")
+		}
+	})
+
+	t.Run("closes app and admin pools", func(t *testing.T) {
+		appPool := &mockPool{}
+		adminPool := &mockPool{}
+		d := &Database{pool: appPool, adminPool: adminPool}
+
+		d.Close()
+
+		if !appPool.closed {
+			t.Fatal("Close() should close app pool")
+		}
+		if !adminPool.closed {
+			t.Fatal("Close() should close admin pool")
 		}
 	})
 }

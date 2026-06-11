@@ -8,7 +8,8 @@
 //	SERVICE_ENV      — deployment environment (default: "development")
 //	SERVICE_VERSION  — service version string (default: "dev")
 //	HTTP_ADDR        — listen address for the HTTP server (default: ":8080")
-//	DATABASE_URL     — Postgres connection URL (default: none)
+//	DATABASE_URL     — Postgres application connection URL (default: none)
+//	DATABASE_ADMIN_URL — privileged Postgres connection URL for system transactions (default: none)
 //	DATABASE_MAX_CONNS — maximum pgx pool connections (default: "10")
 //	DATABASE_MIN_CONNS — minimum pgx pool connections (default: "0")
 //	DATABASE_CONNECT_TIMEOUT — Postgres connection timeout (default: "5s")
@@ -76,9 +77,14 @@ type HTTPConfig struct {
 // DatabaseConfig holds Postgres database configuration as loaded from the
 // environment. The db package parses and validates these values for pgx.
 type DatabaseConfig struct {
-	// Postgres connection URL. It is required when the Postgres capability
-	// connects to the database.
+	// Postgres application connection URL. It is required when the Postgres
+	// capability connects to the database.
 	URL string `env:"URL"`
+
+	// Privileged Postgres connection URL for system transactions that need to
+	// bypass tenant RLS. It is optional at startup, but required when SystemTx is
+	// used.
+	AdminURL string `env:"ADMIN_URL"`
 
 	// Maximum number of connections in the pgx pool.
 	MaxConns string `env:"MAX_CONNS" envDefault:"10"`

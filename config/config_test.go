@@ -11,6 +11,7 @@ func clearConfigEnv(t *testing.T) {
 		"HTTP_ADDR",
 		"HTTP_SHUTDOWN_TIMEOUT",
 		"DATABASE_URL",
+		"DATABASE_ADMIN_URL",
 		"DATABASE_MAX_CONNS",
 		"DATABASE_MIN_CONNS",
 		"DATABASE_CONNECT_TIMEOUT",
@@ -101,6 +102,7 @@ func TestLoad(t *testing.T) {
 		t.Setenv("HTTP_ADDR", ":3000")
 		t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "20s")
 		t.Setenv("DATABASE_URL", "postgres://localhost/app")
+		t.Setenv("DATABASE_ADMIN_URL", "postgres://admin@localhost/app")
 		t.Setenv("DATABASE_MAX_CONNS", "20")
 		t.Setenv("DATABASE_MIN_CONNS", "2")
 		t.Setenv("DATABASE_CONNECT_TIMEOUT", "7s")
@@ -124,6 +126,9 @@ func TestLoad(t *testing.T) {
 		}
 		if cfg.Database().URL != "postgres://localhost/app" {
 			t.Errorf("Database.URL = %q, want %q", cfg.Database().URL, "postgres://localhost/app")
+		}
+		if cfg.Database().AdminURL != "postgres://admin@localhost/app" {
+			t.Errorf("Database.AdminURL = %q, want %q", cfg.Database().AdminURL, "postgres://admin@localhost/app")
 		}
 		if cfg.Database().MaxConns != "20" {
 			t.Errorf("Database.MaxConns = %q, want %q", cfg.Database().MaxConns, "20")
@@ -204,6 +209,9 @@ func TestDatabaseConfig(t *testing.T) {
 		cfg := Load("test")
 		if cfg.Database().URL != "" {
 			t.Errorf("Database.URL = %q, want empty default", cfg.Database().URL)
+		}
+		if cfg.Database().AdminURL != "" {
+			t.Errorf("Database.AdminURL = %q, want empty default", cfg.Database().AdminURL)
 		}
 		if cfg.Database().MaxConns != "10" {
 			t.Errorf("Database.MaxConns = %q, want %q", cfg.Database().MaxConns, "10")
