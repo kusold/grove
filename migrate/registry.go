@@ -8,8 +8,8 @@ import (
 	"io/fs"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/pressly/goose/v3"
 	stdlib "github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
 )
 
 // Source identifies an embedded migration collection.
@@ -79,7 +79,7 @@ func (r *Registry) Run(ctx context.Context, pool *pgxpool.Pool) error {
 		return errors.New("migrate: pool is required")
 	}
 	db := stdlib.OpenDBFromPool(pool)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	for _, source := range r.sources {
 		if err := runSource(ctx, db, source); err != nil {
@@ -100,7 +100,7 @@ func (r *Registry) Validate(ctx context.Context, pool *pgxpool.Pool) error {
 		return errors.New("migrate: pool is required")
 	}
 	db := stdlib.OpenDBFromPool(pool)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	for _, source := range r.sources {
 		if err := validateSource(ctx, db, source); err != nil {
@@ -211,7 +211,7 @@ func (r *Registry) Status(ctx context.Context, pool *pgxpool.Pool) (map[string][
 	}
 
 	db := stdlib.OpenDBFromPool(pool)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	statuses := make(map[string][]*goose.MigrationStatus, len(r.sources))
 	for _, source := range r.sources {
