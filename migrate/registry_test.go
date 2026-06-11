@@ -91,6 +91,50 @@ func TestRegistryRegisterValidation(t *testing.T) {
 	}
 }
 
+func TestRegistryRegisterRejectsVersionTableCollisions(t *testing.T) {
+	registry := NewRegistry()
+	err := registry.Register(Source{
+		Name: "billing-api",
+		FS: fstest.MapFS{
+			"migrations/20260611160000_billing.sql": {},
+		},
+		Dir: "migrations",
+	})
+	if err != nil {
+		t.Fatalf("Register() returned error: %v", err)
+	}
+
+	err = registry.Register(Source{
+		Name: "billing_api",
+		FS: fstest.MapFS{
+			"migrations/20260611170000_billing.sql": {},
+		},
+		Dir: "migrations",
+	})
+	if err == nil {
+		t.Fatal("Register() accepted source with colliding version table")
+	}
+	if want := `migrate: source "billing_api" version table "public.billing_api_db_version" conflicts with source "billing-api"`; err.Error() != want {
+		t.Fatalf("Register() error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestRegistryRegisterRejectsGroveVersionTableCollision(t *testing.T) {
+	err := NewRegistry().Register(Source{
+		Name: "Grove",
+		FS: fstest.MapFS{
+			"migrations/20260611160000_service.sql": {},
+		},
+		Dir: "migrations",
+	})
+	if err == nil {
+		t.Fatal("Register() accepted source that collides with Grove version table")
+	}
+	if want := `migrate: source "Grove" version table "public.grove_db_version" conflicts with source "grove"`; err.Error() != want {
+		t.Fatalf("Register() error = %q, want %q", err.Error(), want)
+	}
+}
+
 func TestNilRegistryRegisterReturnsError(t *testing.T) {
 	var registry *Registry
 	err := registry.Register(Source{Name: "service", FS: fstest.MapFS{}, Dir: "migrations"})

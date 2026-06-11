@@ -80,6 +80,12 @@ func (r *Registry) Register(source Source) error {
 	if source.Dir == "" {
 		return errors.New("migrate: source directory is required")
 	}
+	sourceTable := tableName(source)
+	for _, registered := range r.sources {
+		if tableName(registered) == sourceTable {
+			return fmt.Errorf("migrate: source %q version table %q conflicts with source %q", source.Name, sourceTable, registered.Name)
+		}
+	}
 	r.sources = append(r.sources, source)
 	return nil
 }
