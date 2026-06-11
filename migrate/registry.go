@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"sort"
+	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	stdlib "github.com/jackc/pgx/v5/stdlib"
@@ -27,6 +30,33 @@ type Source struct {
 // Registry collects migration sources in deterministic registration order.
 type Registry struct {
 	sources []Source
+}
+
+// MigrationState describes whether a registered migration has been applied.
+type MigrationState string
+
+const (
+	// MigrationPending means the migration exists in a registered source but has
+	// not been applied to the database.
+	MigrationPending MigrationState = "pending"
+
+	// MigrationApplied means the migration exists in a registered source and is
+	// recorded as applied in the source version table.
+	MigrationApplied MigrationState = "applied"
+)
+
+// MigrationStatus describes one registered migration without exposing the
+// underlying migration engine's types.
+type MigrationStatus struct {
+	Path      string
+	Version   int64
+	State     MigrationState
+	AppliedAt time.Time
+}
+
+type migrationFile struct {
+	path    string
+	version int64
 }
 
 // NewRegistry returns a registry initialized with Grove-owned migrations.
@@ -175,34 +205,29 @@ func runSource(ctx context.Context, db *sql.DB, source Source) error {
 
 // validateSource checks whether a single source has pending migrations.
 func validateSource(ctx context.Context, db *sql.DB, source Source) error {
-	migrationFS, err := subFS(source)
+	migrations, err := collectMigrationFiles(source)
 	if err != nil {
 		return err
 	}
 
-	provider, err := goose.NewProvider(
-		goose.DialectPostgres,
-		db,
-		migrationFS,
-		goose.WithTableName(tableName(source)),
-	)
+	applied, exists, err := appliedMigrations(ctx, db, tableName(source))
 	if err != nil {
-		return fmt.Errorf("create migration provider: %w", err)
+		return fmt.Errorf("check applied migrations: %w", err)
 	}
-
-	pending, err := provider.HasPending(ctx)
-	if err != nil {
-		return fmt.Errorf("check pending migrations: %w", err)
-	}
-	if pending {
+	if !exists {
 		return errors.New("pending migrations detected")
+	}
+	for _, migration := range migrations {
+		if _, ok := applied[migration.version]; !ok {
+			return errors.New("pending migrations detected")
+		}
 	}
 	return nil
 }
 
 // Status returns the migration status for all registered sources. Each source
 // is checked independently against its own goose version table.
-func (r *Registry) Status(ctx context.Context, pool *pgxpool.Pool) (map[string][]*goose.MigrationStatus, error) {
+func (r *Registry) Status(ctx context.Context, pool *pgxpool.Pool) (map[string][]MigrationStatus, error) {
 	if r == nil {
 		return nil, errors.New("migrate: registry is nil")
 	}
@@ -213,28 +238,130 @@ func (r *Registry) Status(ctx context.Context, pool *pgxpool.Pool) (map[string][
 	db := stdlib.OpenDBFromPool(pool)
 	defer func() { _ = db.Close() }()
 
-	statuses := make(map[string][]*goose.MigrationStatus, len(r.sources))
+	statuses := make(map[string][]MigrationStatus, len(r.sources))
 	for _, source := range r.sources {
-		migrationFS, err := subFS(source)
+		status, err := sourceStatus(ctx, db, source)
 		if err != nil {
 			return nil, fmt.Errorf("migrate: source %q: %w", source.Name, err)
-		}
-
-		provider, err := goose.NewProvider(
-			goose.DialectPostgres,
-			db,
-			migrationFS,
-			goose.WithTableName(tableName(source)),
-		)
-		if err != nil {
-			return nil, fmt.Errorf("migrate: source %q: create provider: %w", source.Name, err)
-		}
-
-		status, err := provider.Status(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("migrate: source %q: status: %w", source.Name, err)
 		}
 		statuses[source.Name] = status
 	}
 	return statuses, nil
+}
+
+func sourceStatus(ctx context.Context, db *sql.DB, source Source) ([]MigrationStatus, error) {
+	migrations, err := collectMigrationFiles(source)
+	if err != nil {
+		return nil, err
+	}
+	applied, exists, err := appliedMigrations(ctx, db, tableName(source))
+	if err != nil {
+		return nil, fmt.Errorf("check applied migrations: %w", err)
+	}
+
+	status := make([]MigrationStatus, 0, len(migrations))
+	for _, migration := range migrations {
+		entry := MigrationStatus{
+			Path:    migration.path,
+			Version: migration.version,
+			State:   MigrationPending,
+		}
+		if exists {
+			if appliedAt, ok := applied[migration.version]; ok {
+				entry.State = MigrationApplied
+				entry.AppliedAt = appliedAt
+			}
+		}
+		status = append(status, entry)
+	}
+	return status, nil
+}
+
+func collectMigrationFiles(source Source) ([]migrationFile, error) {
+	migrationFS, err := subFS(source)
+	if err != nil {
+		return nil, err
+	}
+	paths, err := fs.Glob(migrationFS, "*.sql")
+	if err != nil {
+		return nil, fmt.Errorf("find migration files: %w", err)
+	}
+	if len(paths) == 0 {
+		return nil, goose.ErrNoMigrationFiles
+	}
+
+	migrations := make([]migrationFile, 0, len(paths))
+	seen := make(map[int64]string, len(paths))
+	for _, path := range paths {
+		version, err := goose.NumericComponent(path)
+		if err != nil {
+			continue
+		}
+		if previous, ok := seen[version]; ok {
+			return nil, fmt.Errorf("duplicate migration version %d in %q and %q", version, previous, path)
+		}
+		seen[version] = path
+		migrations = append(migrations, migrationFile{path: path, version: version})
+	}
+	if len(migrations) == 0 {
+		return nil, goose.ErrNoMigrationFiles
+	}
+
+	sort.Slice(migrations, func(i, j int) bool {
+		return migrations[i].version < migrations[j].version
+	})
+	return migrations, nil
+}
+
+func appliedMigrations(ctx context.Context, db *sql.DB, qualifiedTable string) (map[int64]time.Time, bool, error) {
+	schema, table := splitTableName(qualifiedTable)
+	var exists bool
+	if err := db.QueryRowContext(ctx, `
+		select exists (
+			select 1
+			from pg_tables
+			where schemaname = $1 and tablename = $2
+		)
+	`, schema, table).Scan(&exists); err != nil {
+		return nil, false, fmt.Errorf("check version table: %w", err)
+	}
+	if !exists {
+		return map[int64]time.Time{}, false, nil
+	}
+
+	rows, err := db.QueryContext(ctx, fmt.Sprintf(
+		"select version_id, is_applied, tstamp from %s order by id asc",
+		qualifiedTable,
+	))
+	if err != nil {
+		return nil, false, fmt.Errorf("list version table: %w", err)
+	}
+	defer rows.Close()
+
+	applied := make(map[int64]time.Time)
+	for rows.Next() {
+		var version int64
+		var isApplied bool
+		var appliedAt time.Time
+		if err := rows.Scan(&version, &isApplied, &appliedAt); err != nil {
+			return nil, false, fmt.Errorf("scan version table: %w", err)
+		}
+		if isApplied {
+			applied[version] = appliedAt
+		} else {
+			delete(applied, version)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	return applied, true, nil
+}
+
+func splitTableName(qualifiedTable string) (string, string) {
+	schema, table, ok := strings.Cut(qualifiedTable, ".")
+	if !ok {
+		return "public", qualifiedTable
+	}
+	return schema, table
 }

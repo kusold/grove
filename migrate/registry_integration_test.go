@@ -279,6 +279,9 @@ func TestRegistry_ValidateIntegration(t *testing.T) {
 		if err.Error() != `migrate: source "grove": pending migrations detected` {
 			t.Errorf("Validate() error = %q, want pending migrations error", err.Error())
 		}
+		if versionTableExists(t, ctx, pool, "grove_db_version") {
+			t.Fatal("Validate() created grove_db_version table; validate mode must not mutate schema")
+		}
 	})
 
 	t.Run("returns nil when all migrations are applied", func(t *testing.T) {
@@ -400,6 +403,18 @@ drop table if exists status_test;
 	if len(groveStatus) == 0 {
 		t.Fatal("grove source has no migration statuses")
 	}
+	if groveStatus[0].State != MigrationApplied {
+		t.Fatalf("grove migration state = %q, want %q", groveStatus[0].State, MigrationApplied)
+	}
+	if groveStatus[0].Version == 0 {
+		t.Fatal("grove migration status missing version")
+	}
+	if groveStatus[0].Path == "" {
+		t.Fatal("grove migration status missing path")
+	}
+	if groveStatus[0].AppliedAt.IsZero() {
+		t.Fatal("grove migration status missing applied timestamp")
+	}
 
 	serviceStatus, ok := statuses["status-service"]
 	if !ok {
@@ -407,6 +422,9 @@ drop table if exists status_test;
 	}
 	if len(serviceStatus) == 0 {
 		t.Fatal("status-service has no migration statuses")
+	}
+	if serviceStatus[0].State != MigrationApplied {
+		t.Fatalf("service migration state = %q, want %q", serviceStatus[0].State, MigrationApplied)
 	}
 }
 
@@ -499,6 +517,22 @@ func connectPool(t *testing.T, ctx context.Context, databaseURL string) *pgxpool
 		t.Fatalf("ping postgres: %v", err)
 	}
 	return pool
+}
+
+func versionTableExists(t *testing.T, ctx context.Context, pool *pgxpool.Pool, table string) bool {
+	t.Helper()
+	var exists bool
+	err := pool.QueryRow(ctx, `
+		select exists(
+			select 1
+			from information_schema.tables
+			where table_schema = 'public' and table_name = $1
+		)
+	`, table).Scan(&exists)
+	if err != nil {
+		t.Fatalf("check version table %q: %v", table, err)
+	}
+	return exists
 }
 
 func init() {
