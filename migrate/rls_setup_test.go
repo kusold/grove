@@ -102,3 +102,35 @@ func TestRLSSetupSQLExtractsOnlyUpMigrationBody(t *testing.T) {
 		}
 	}
 }
+
+func TestGooseSectionMissingMarker(t *testing.T) {
+	_, err := gooseSection("-- +goose Down\ndrop table t;", "-- +goose Up")
+	if err == nil {
+		t.Fatal("gooseSection() with missing marker returned nil error")
+	}
+	if !strings.Contains(err.Error(), "missing") {
+		t.Errorf("gooseSection() error = %v, want missing marker error", err)
+	}
+}
+
+func TestGooseSectionMissingDown(t *testing.T) {
+	sql := "-- +goose Up\nselect 1;"
+	_, err := gooseSection(sql, "-- +goose Up")
+	if err == nil {
+		t.Fatal("gooseSection() with missing Down returned nil error")
+	}
+	if !strings.Contains(err.Error(), "Down") {
+		t.Errorf("gooseSection() error = %v, want missing Down error", err)
+	}
+}
+
+func TestGooseSectionUnexpectedAnnotation(t *testing.T) {
+	sql := "-- +goose Up\n-- +goose StatementBegin\nselect 1;\n-- +goose StatementEnd\n-- +goose Rebase\ndrop table t;\n\n-- +goose Down\n-- +goose StatementBegin\ndrop table t;\n-- +goose StatementEnd\n"
+	_, err := gooseSection(sql, "-- +goose Up")
+	if err == nil {
+		t.Fatal("gooseSection() with unexpected annotation returned nil error")
+	}
+	if !strings.Contains(err.Error(), "unexpected goose annotation") {
+		t.Errorf("gooseSection() error = %v, want unexpected annotation error", err)
+	}
+}
