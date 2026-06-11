@@ -2,46 +2,71 @@ package migrate
 
 import (
 	"embed"
+	"fmt"
 	"io/fs"
 	"strings"
 )
 
-//go:embed rls_setup.sql
-var rlsSetupFS embed.FS
+const groveMigrationDir = "migrations"
 
-// RLSSetupSQL returns the raw SQL that creates the grove schema and the
-// grove.current_tenant_id() helper function used by Row-Level Security policies.
+//go:embed migrations/*.sql
+var groveMigrationFS embed.FS
+
+// GroveMigrations returns Grove-owned migrations, including the RLS prelude.
 //
-// Use this when you need to apply the RLS setup programmatically outside of
-// goose's migration system.
+// Service-owned migrations should be registered separately and run after these
+// migrations so tenant-scoped tables can reference grove.current_tenant_id().
+func GroveMigrations() Source {
+	return Source{
+		Name: "grove",
+		FS:   groveMigrationFS,
+		Dir:  groveMigrationDir,
+	}
+}
+
+// RLSSetupSQL returns the SQL applied by Grove's RLS prelude migration.
+//
+// This helper exists for tests and direct setup paths until the migration runner
+// is wired. Startup migration code should use GroveMigrations instead.
 func RLSSetupSQL() string {
-	b, err := fs.ReadFile(rlsSetupFS, "rls_setup.sql")
+	b, err := fs.ReadFile(groveMigrationFS, "migrations/20260611154614_grove_rls_prelude.sql")
 	if err != nil {
-		// This should never happen since rls_setup.sql is embedded at compile time.
-		panic("migrate: failed to read embedded rls_setup.sql: " + err.Error())
+		// This should never happen since the migration is embedded at compile time.
+		panic("migrate: failed to read embedded RLS prelude migration: " + err.Error())
 	}
-	return string(b)
+	sql, err := gooseSection(string(b), "-- +goose Up")
+	if err != nil {
+		panic("migrate: failed to read RLS prelude up migration: " + err.Error())
+	}
+	return sql
 }
 
-// RLSSetupStatements returns the RLS setup SQL split into individual
-// statements. This is useful for drivers that do not support executing
-// multiple statements in a single call.
-func RLSSetupStatements() []string {
-	return splitStatements(RLSSetupSQL())
-}
-
-// splitStatements splits SQL text into individual statements, stripping
-// comments and empty lines. Each returned string is a single SQL statement
-// without a trailing semicolon.
-func splitStatements(sql string) []string {
-	var stmts []string
-	for _, line := range strings.Split(sql, "\n") {
+func gooseSection(sql, marker string) (string, error) {
+	lines := strings.Split(sql, "\n")
+	started := false
+	inStatement := false
+	var out []string
+	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		// Skip empty lines and comments.
-		if trimmed == "" || strings.HasPrefix(trimmed, "--") {
+		switch {
+		case trimmed == marker:
+			started = true
+		case !started:
 			continue
+		case strings.HasPrefix(trimmed, "-- +goose Down"):
+			return strings.TrimSpace(strings.Join(out, "\n")) + "\n", nil
+		case strings.HasPrefix(trimmed, "-- +goose StatementBegin"):
+			inStatement = true
+		case strings.HasPrefix(trimmed, "-- +goose StatementEnd"):
+			inStatement = false
+		case strings.HasPrefix(trimmed, "-- +goose"):
+			return "", fmt.Errorf("unexpected goose annotation %q", trimmed)
+		case inStatement:
+			out = append(out, line)
 		}
-		stmts = append(stmts, trimmed)
 	}
-	return stmts
+	if !started {
+		return "", fmt.Errorf("missing %s section", marker)
+	}
+	return "", fmt.Errorf("missing -- +goose Down section")
 }
