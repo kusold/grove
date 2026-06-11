@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/kusold/grove/internal/integrationtest"
+	"github.com/kusold/grove/migrate"
 	"github.com/kusold/grove/tenancy"
 )
 
@@ -74,20 +75,10 @@ func setupTestDB(t *testing.T) *Database {
 	}
 	t.Cleanup(database.Close)
 
-	// Create grove schema and current_tenant_id helper function.
-	_, err = database.Pool().Exec(ctx, `
-		create schema if not exists grove;
-
-		create or replace function grove.current_tenant_id()
-		returns uuid
-		language sql
-		stable
-		as $$
-			select nullif(current_setting('app.tenant_id', true), '')::uuid
-		$$;
-	`)
+	// Apply the Grove RLS prelude (schema + current_tenant_id function).
+	_, err = database.Pool().Exec(ctx, migrate.PreludeSQL())
 	if err != nil {
-		t.Fatalf("create grove schema and function: %v", err)
+		t.Fatalf("apply grove prelude: %v", err)
 	}
 
 	return database
@@ -137,21 +128,13 @@ func setupRLSTestDB(t *testing.T) (ownerDB, appDB *Database) {
 		t.Fatalf("create grove_app role: %v", err)
 	}
 
-	// Create grove schema and function (owned by superuser).
-	_, err = ownerDB.Pool().Exec(ctx, `
-		create schema if not exists grove;
-
-		create or replace function grove.current_tenant_id()
-		returns uuid
-		language sql
-		stable
-		as $$
-			select nullif(current_setting('app.tenant_id', true), '')::uuid
-		$$;
-
+	// Apply the Grove RLS prelude (schema + current_tenant_id function),
+	// then grant the app user access to the schemas.
+	preludeAndGrants := migrate.PreludeSQL() + `
 		grant usage on schema grove to grove_app;
 		grant usage on schema public to grove_app;
-	`)
+	`
+	_, err = ownerDB.Pool().Exec(ctx, preludeAndGrants)
 	if err != nil {
 		t.Fatalf("setup grove schema: %v", err)
 	}
