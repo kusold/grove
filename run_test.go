@@ -1661,7 +1661,7 @@ func TestWithPostgres(t *testing.T) {
 		}
 	})
 
-	t.Run("registers Postgres readiness but not liveness", func(t *testing.T) {
+	t.Run("registers Postgres health and readiness checks", func(t *testing.T) {
 		app, err := NewApp("test", WithHTTP(), WithPostgres())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -1669,8 +1669,8 @@ func TestWithPostgres(t *testing.T) {
 
 		wirePostgresLifecycle(app)
 
-		if err := app.Health().IsHealthy(context.Background()); err != nil {
-			t.Fatalf("health should not depend on Postgres: %v", err)
+		if err := app.Health().IsHealthy(context.Background()); err == nil {
+			t.Fatal("health should fail before Postgres connects")
 		}
 		if err := app.Health().IsReady(context.Background()); err == nil {
 			t.Fatal("readiness should fail before Postgres connects")

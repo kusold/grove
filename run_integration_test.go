@@ -2,6 +2,10 @@ package grove
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"net"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +14,12 @@ import (
 	"github.com/kusold/grove/internal/integrationtest"
 	"github.com/kusold/grove/lifecycle"
 )
+
+// closeBody drains and closes an HTTP response body to satisfy errcheck.
+func closeBody(resp *http.Response) {
+	_, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+}
 
 func TestRun_PostgresLifecycle(t *testing.T) {
 	t.Run("connects to Postgres during startup", func(t *testing.T) {
@@ -304,6 +314,208 @@ func TestRun_PostgresHealthChecks(t *testing.T) {
 			t.Fatalf("Run() completed before readiness check: %v", err)
 		case <-time.After(30 * time.Second):
 			t.Fatal("readiness check did not pass within timeout")
+		}
+
+		cancel()
+
+		select {
+		case err := <-runDone:
+			if err != nil {
+				t.Fatalf("Run() returned unexpected error: %v", err)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatal("Run() did not complete within timeout")
+		}
+	})
+
+	t.Run("healthz reflects Postgres connectivity after startup", func(t *testing.T) {
+		clearConfigEnv(t)
+		t.Setenv("DATABASE_URL", databaseURL)
+		t.Setenv("HTTP_ADDR", "127.0.0.1:0")
+		t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "5s")
+
+		healthy := make(chan struct{})
+		m := testModule{
+			name: "pg-health-test",
+			register: func(ctx context.Context, app *App) error {
+				app.Lifecycle().Append(lifecycle.Hook{
+					Name: "verify-healthy",
+					Start: func(ctx context.Context) error {
+						// After postgres connects, health should pass
+						if err := app.Health().IsHealthy(ctx); err != nil {
+							return err
+						}
+						close(healthy)
+						return nil
+					},
+				})
+				return nil
+			},
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		runDone := make(chan error, 1)
+		go func() {
+			runDone <- Run(ctx, m, WithHTTP(), WithPostgres())
+		}()
+
+		select {
+		case <-healthy:
+			// Health check passed
+		case err := <-runDone:
+			t.Fatalf("Run() completed before health check: %v", err)
+		case <-time.After(30 * time.Second):
+			t.Fatal("health check did not pass within timeout")
+		}
+
+		cancel()
+
+		select {
+		case err := <-runDone:
+			if err != nil {
+				t.Fatalf("Run() returned unexpected error: %v", err)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatal("Run() did not complete within timeout")
+		}
+	})
+
+	t.Run("healthz returns 200 via HTTP after Postgres connects", func(t *testing.T) {
+		clearConfigEnv(t)
+		t.Setenv("DATABASE_URL", databaseURL)
+
+		// Bind to a known available port
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("failed to allocate listener: %v", err)
+		}
+		addr := ln.Addr().String()
+		_ = ln.Close()
+
+		t.Setenv("HTTP_ADDR", addr)
+		t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "5s")
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		runDone := make(chan error, 1)
+		go func() {
+			runDone <- Run(ctx, testModule{name: "pg-healthz-http"}, WithHTTP(), WithPostgres())
+		}()
+
+		// Wait for server to be ready by polling readyz
+		client := &http.Client{Timeout: 2 * time.Second}
+		deadline := time.Now().Add(30 * time.Second)
+		var lastErr error
+		for time.Now().Before(deadline) {
+			resp, err := client.Get("http://" + addr + "/readyz")
+			if err == nil {
+				closeBody(resp)
+				if resp.StatusCode == http.StatusOK {
+					break
+				}
+			}
+			lastErr = err
+			time.Sleep(50 * time.Millisecond)
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			t.Fatalf("server did not become ready: %v", lastErr)
+		}
+
+		// Now verify healthz returns 200
+		resp, err := client.Get("http://" + addr + "/healthz")
+		if err != nil {
+			t.Fatalf("GET /healthz: %v", err)
+		}
+		defer closeBody(resp)
+
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("/healthz status = %d, want %d", resp.StatusCode, http.StatusOK)
+		}
+
+		var body map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatalf("decode healthz response: %v", err)
+		}
+		if body["status"] != "ok" {
+			t.Errorf("healthz status = %v, want %q", body["status"], "ok")
+		}
+
+		cancel()
+
+		select {
+		case err := <-runDone:
+			if err != nil {
+				t.Fatalf("Run() returned unexpected error: %v", err)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatal("Run() did not complete within timeout")
+		}
+	})
+
+	t.Run("readyz returns 200 via HTTP after Postgres connects", func(t *testing.T) {
+		clearConfigEnv(t)
+		t.Setenv("DATABASE_URL", databaseURL)
+
+		// Bind to a known available port
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("failed to allocate listener: %v", err)
+		}
+		addr := ln.Addr().String()
+		_ = ln.Close()
+
+		t.Setenv("HTTP_ADDR", addr)
+		t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "5s")
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		runDone := make(chan error, 1)
+		go func() {
+			runDone <- Run(ctx, testModule{name: "pg-readyz-http"}, WithHTTP(), WithPostgres())
+		}()
+
+		// Wait for server to be ready by polling readyz
+		client := &http.Client{Timeout: 2 * time.Second}
+		deadline := time.Now().Add(30 * time.Second)
+		var lastErr error
+		for time.Now().Before(deadline) {
+			resp, err := client.Get("http://" + addr + "/readyz")
+			if err == nil {
+				closeBody(resp)
+				if resp.StatusCode == http.StatusOK {
+					break
+				}
+			}
+			lastErr = err
+			time.Sleep(50 * time.Millisecond)
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			t.Fatalf("server did not become ready: %v", lastErr)
+		}
+
+		// Verify readyz returns 200 with OK status
+		resp, err := client.Get("http://" + addr + "/readyz")
+		if err != nil {
+			t.Fatalf("GET /readyz: %v", err)
+		}
+		defer closeBody(resp)
+
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("/readyz status = %d, want %d", resp.StatusCode, http.StatusOK)
+		}
+
+		var body map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatalf("decode readyz response: %v", err)
+		}
+		if body["status"] != "ok" {
+			t.Errorf("readyz status = %v, want %q", body["status"], "ok")
 		}
 
 		cancel()

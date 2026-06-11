@@ -125,8 +125,8 @@ func Run(ctx context.Context, module Module, opts ...Option) error {
 
 // wirePostgresLifecycle registers lifecycle hooks and health checks for the
 // Postgres capability. The pool is connected during startup and closed during
-// shutdown. Health and readiness checks are registered so that /healthz and
-// /readyz reflect Postgres connectivity.
+// shutdown. Both health and readiness checks are registered so that /healthz
+// and /readyz reflect Postgres connectivity.
 func wirePostgresLifecycle(app *App) {
 	app.Lifecycle().Append(lifecycle.Hook{
 		Name: "postgres-connect",
@@ -148,6 +148,13 @@ func wirePostgresLifecycle(app *App) {
 			app.db.Close()
 			app.Logger().Info("postgres pool closed")
 			return nil
+		},
+	})
+
+	app.Health().RegisterHealth(health.Check{
+		Name: "postgres",
+		Check: func(ctx context.Context) error {
+			return app.db.Ping(ctx)
 		},
 	})
 
