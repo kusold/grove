@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -276,6 +277,7 @@ func (d *Database) SystemTx(ctx context.Context, reason string, fn func(ctx cont
 		return errors.New("db: pool is not initialized")
 	}
 
+	reason = strings.TrimSpace(reason)
 	if reason == "" {
 		return errors.New("db: system transaction requires a non-empty reason")
 	}
