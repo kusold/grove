@@ -12,6 +12,7 @@ import (
 	"github.com/kusold/grove/health"
 	"github.com/kusold/grove/httpx"
 	"github.com/kusold/grove/lifecycle"
+	"github.com/kusold/grove/migrate"
 	"github.com/kusold/grove/tenancy"
 )
 
@@ -30,9 +31,10 @@ type builder struct {
 type capability string
 
 const (
-	capHTTP     capability = "http"
-	capTenancy  capability = "tenancy"
-	capPostgres capability = "postgres"
+	capHTTP       capability = "http"
+	capTenancy    capability = "tenancy"
+	capPostgres   capability = "postgres"
+	capMigrations capability = "migrations"
 )
 
 // capabilityDeps maps each capability to its required dependencies.
@@ -40,7 +42,8 @@ const (
 // enabled. Dependencies are validated after all options are applied, so the
 // order of options does not matter.
 var capabilityDeps = map[capability][]capability{
-	capTenancy: {capHTTP},
+	capTenancy:    {capHTTP},
+	capMigrations: {capPostgres},
 }
 
 // capabilityOrder defines the deterministic initialization order for
@@ -50,22 +53,25 @@ var capabilityOrder = []capability{
 	capHTTP,
 	capTenancy,
 	capPostgres,
+	capMigrations,
 }
 
 // capabilityOptionName maps each capability to the Option function name used
 // in error messages to guide users toward the fix.
 var capabilityOptionName = map[capability]string{
-	capHTTP:     "WithHTTP",
-	capTenancy:  "WithTenancy",
-	capPostgres: "WithPostgres",
+	capHTTP:       "WithHTTP",
+	capTenancy:    "WithTenancy",
+	capPostgres:   "WithPostgres",
+	capMigrations: "WithMigrations",
 }
 
 // capabilityDisplayName maps each capability to a human-readable name used in
 // error messages.
 var capabilityDisplayName = map[capability]string{
-	capHTTP:     "http",
-	capTenancy:  "tenancy",
-	capPostgres: "postgres",
+	capHTTP:       "http",
+	capTenancy:    "tenancy",
+	capPostgres:   "postgres",
+	capMigrations: "migrations",
 }
 
 func newBuilder(name string) *builder {
@@ -142,6 +148,11 @@ func (b *builder) buildApp() *App {
 		database = &db.Database{}
 	}
 
+	var migrateReg *migrate.Registry
+	if b.hasCapability(capMigrations) {
+		migrateReg = migrate.NewRegistry()
+	}
+
 	return &App{
 		name:         b.name,
 		capabilities: b.capabilitySet(),
@@ -151,6 +162,7 @@ func (b *builder) buildApp() *App {
 		healthReg:    health.New(),
 		httpReg:      httpReg,
 		db:           database,
+		migrateReg:   migrateReg,
 	}
 }
 
@@ -396,6 +408,26 @@ func WithTenancy() Option {
 func WithPostgres() Option {
 	return func(b *builder) error {
 		b.enableCapability(capPostgres)
+		return nil
+	}
+}
+
+// WithMigrations enables the migration capability, backed by goose. When
+// enabled, Grove creates a migration registry that services can register
+// migration sources against. The migration behavior at startup is controlled by
+// the GROVE_MIGRATIONS environment variable:
+//
+//	GROVE_MIGRATIONS=off       — skip migrations at startup (default)
+//	GROVE_MIGRATIONS=validate  — verify migrations are current; fail startup if not
+//	GROVE_MIGRATIONS=up        — run pending migrations automatically during startup
+//
+// Migrations require the Postgres capability. If WithPostgres() is not also
+// provided, Grove will fail at startup with a clear error:
+//
+//	grove: migrations requires postgres, but it was not enabled; add grove.WithPostgres()
+func WithMigrations() Option {
+	return func(b *builder) error {
+		b.enableCapability(capMigrations)
 		return nil
 	}
 }

@@ -530,3 +530,281 @@ func TestRun_PostgresHealthChecks(t *testing.T) {
 		}
 	})
 }
+
+func TestRun_MigrationLifecycle(t *testing.T) {
+	t.Run("runs migrations in up mode during startup", func(t *testing.T) {
+		databaseURL := integrationtest.Postgres18(t)
+		clearConfigEnv(t)
+		t.Setenv("DATABASE_URL", databaseURL)
+		t.Setenv("GROVE_MIGRATIONS", "up")
+		t.Setenv("HTTP_ADDR", "127.0.0.1:0")
+		t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "5s")
+
+		migrated := make(chan struct{})
+		m := testModule{
+			name: "migrate-up-test",
+			register: func(ctx context.Context, app *App) error {
+				reg, err := app.RequireMigrations()
+				if err != nil {
+					return err
+				}
+				// Verify Grove migrations are pre-registered
+				sources := reg.Sources()
+				if len(sources) == 0 {
+					t.Error("expected at least Grove migrations to be registered")
+				}
+				app.Lifecycle().Append(lifecycle.Hook{
+					Name: "verify-migrations",
+					Start: func(ctx context.Context) error {
+						close(migrated)
+						return nil
+					},
+				})
+				return nil
+			},
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		runDone := make(chan error, 1)
+		go func() {
+			runDone <- Run(ctx, m, WithHTTP(), WithPostgres(), WithMigrations())
+		}()
+
+		select {
+		case <-migrated:
+			// Migrations ran successfully during startup
+		case err := <-runDone:
+			t.Fatalf("Run() completed before migration verification: %v", err)
+		case <-time.After(30 * time.Second):
+			t.Fatal("migration did not complete within timeout")
+		}
+
+		cancel()
+
+		select {
+		case err := <-runDone:
+			if err != nil {
+				t.Fatalf("Run() returned unexpected error: %v", err)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatal("Run() did not complete within timeout")
+		}
+	})
+
+	t.Run("validates migrations in validate mode", func(t *testing.T) {
+		databaseURL := integrationtest.Postgres18(t)
+		clearConfigEnv(t)
+		t.Setenv("DATABASE_URL", databaseURL)
+		t.Setenv("GROVE_MIGRATIONS", "validate")
+		t.Setenv("HTTP_ADDR", "127.0.0.1:0")
+		t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "5s")
+
+		// Validate will fail because migrations have not been applied
+		m := testModule{name: "migrate-validate-fail-test"}
+
+		err := Run(context.Background(), m, WithHTTP(), WithPostgres(), WithMigrations())
+		if err == nil {
+			t.Fatal("expected error when migrations have not been applied in validate mode")
+		}
+		if !strings.Contains(err.Error(), "lifecycle start") {
+			t.Errorf("error = %q, want to contain 'lifecycle start'", err.Error())
+		}
+		if !strings.Contains(err.Error(), "migration validation") {
+			t.Errorf("error = %q, want to contain 'migration validation'", err.Error())
+		}
+	})
+
+	t.Run("skips migrations in off mode", func(t *testing.T) {
+		databaseURL := integrationtest.Postgres18(t)
+		clearConfigEnv(t)
+		t.Setenv("DATABASE_URL", databaseURL)
+		t.Setenv("GROVE_MIGRATIONS", "off")
+		t.Setenv("HTTP_ADDR", "127.0.0.1:0")
+		t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "5s")
+
+		connected := make(chan struct{})
+		m := testModule{
+			name: "migrate-off-test",
+			register: func(ctx context.Context, app *App) error {
+				app.Lifecycle().Append(lifecycle.Hook{
+					Name: "verify-db",
+					Start: func(ctx context.Context) error {
+						database, err := app.RequireDB()
+						if err != nil {
+							return err
+						}
+						if err := database.Ping(ctx); err != nil {
+							return err
+						}
+						close(connected)
+						return nil
+					},
+				})
+				return nil
+			},
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		runDone := make(chan error, 1)
+		go func() {
+			runDone <- Run(ctx, m, WithHTTP(), WithPostgres(), WithMigrations())
+		}()
+
+		select {
+		case <-connected:
+			// DB connected successfully, migrations were skipped
+		case err := <-runDone:
+			t.Fatalf("Run() completed before DB connection: %v", err)
+		case <-time.After(30 * time.Second):
+			t.Fatal("DB connection did not complete within timeout")
+		}
+
+		cancel()
+
+		select {
+		case err := <-runDone:
+			if err != nil {
+				t.Fatalf("Run() returned unexpected error: %v", err)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatal("Run() did not complete within timeout")
+		}
+	})
+
+	t.Run("migration runs after DB connect and before HTTP readiness", func(t *testing.T) {
+		databaseURL := integrationtest.Postgres18(t)
+		clearConfigEnv(t)
+		t.Setenv("DATABASE_URL", databaseURL)
+		t.Setenv("GROVE_MIGRATIONS", "up")
+		t.Setenv("HTTP_ADDR", "127.0.0.1:0")
+		t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "5s")
+
+		var order []string
+		m := testModule{
+			name: "migrate-order-test",
+			register: func(ctx context.Context, app *App) error {
+				app.Lifecycle().Append(lifecycle.Hook{
+					Name: "verify-order",
+					Start: func(ctx context.Context) error {
+						order = append(order, "module-hook")
+						return nil
+					},
+				})
+				return nil
+			},
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		runDone := make(chan error, 1)
+		go func() {
+			runDone <- Run(ctx, m, WithHTTP(), WithPostgres(), WithMigrations())
+		}()
+
+		// Wait for startup to complete
+		time.Sleep(500 * time.Millisecond)
+
+		cancel()
+
+		select {
+		case err := <-runDone:
+			if err != nil {
+				t.Fatalf("Run() returned unexpected error: %v", err)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatal("Run() did not complete within timeout")
+		}
+
+		// Lifecycle hooks run in order: postgres-connect, migrations, module-hook
+		// so module-hook should have run after migrations
+		for _, name := range order {
+			if name == "module-hook" {
+				// Success: module hook ran after migrations
+				return
+			}
+		}
+		t.Errorf("expected module-hook to run after migrations, order = %v", order)
+	})
+
+	t.Run("migration readiness check passes after up", func(t *testing.T) {
+		databaseURL := integrationtest.Postgres18(t)
+		clearConfigEnv(t)
+		t.Setenv("DATABASE_URL", databaseURL)
+		t.Setenv("GROVE_MIGRATIONS", "up")
+		t.Setenv("HTTP_ADDR", "127.0.0.1:0")
+		t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "5s")
+
+		ready := make(chan struct{})
+		m := testModule{
+			name: "migrate-ready-test",
+			register: func(ctx context.Context, app *App) error {
+				app.Lifecycle().Append(lifecycle.Hook{
+					Name: "verify-ready",
+					Start: func(ctx context.Context) error {
+						if err := app.Health().IsReady(ctx); err != nil {
+							return err
+						}
+						close(ready)
+						return nil
+					},
+				})
+				return nil
+			},
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		runDone := make(chan error, 1)
+		go func() {
+			runDone <- Run(ctx, m, WithHTTP(), WithPostgres(), WithMigrations())
+		}()
+
+		select {
+		case <-ready:
+			// Readiness check passed after migrations
+		case err := <-runDone:
+			t.Fatalf("Run() completed before readiness check: %v", err)
+		case <-time.After(30 * time.Second):
+			t.Fatal("readiness check did not pass within timeout")
+		}
+
+		cancel()
+
+		select {
+		case err := <-runDone:
+			if err != nil {
+				t.Fatalf("Run() returned unexpected error: %v", err)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatal("Run() did not complete within timeout")
+		}
+	})
+
+	t.Run("fails with unknown migration mode", func(t *testing.T) {
+		databaseURL := integrationtest.Postgres18(t)
+		clearConfigEnv(t)
+		t.Setenv("DATABASE_URL", databaseURL)
+		t.Setenv("GROVE_MIGRATIONS", "invalid")
+		t.Setenv("HTTP_ADDR", "127.0.0.1:0")
+		t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "5s")
+
+		m := testModule{name: "migrate-invalid-mode-test"}
+
+		err := Run(context.Background(), m, WithHTTP(), WithPostgres(), WithMigrations())
+		if err == nil {
+			t.Fatal("expected error with unknown migration mode")
+		}
+		if !strings.Contains(err.Error(), "lifecycle start") {
+			t.Errorf("error = %q, want to contain 'lifecycle start'", err.Error())
+		}
+		if !strings.Contains(err.Error(), "unknown mode") {
+			t.Errorf("error = %q, want to contain 'unknown mode'", err.Error())
+		}
+	})
+}

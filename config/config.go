@@ -15,6 +15,7 @@
 //	DATABASE_CONNECT_TIMEOUT — Postgres connection timeout (default: "5s")
 //	LOG_FORMAT       — log output format: "text" or "json" (default: "text")
 //	LOG_COLOR        — colorize text output: "on", "off", or "auto" (default: "auto")
+//	GROVE_MIGRATIONS — migration startup mode: "off", "validate", or "up" (default: "off")
 //
 // If both Module.Name() and SERVICE_NAME are set, SERVICE_NAME overrides the
 // runtime config but does not change module identity. This distinction is
@@ -37,14 +38,16 @@ type Provider interface {
 	HTTP() HTTPConfig
 	Database() DatabaseConfig
 	Logger() LoggerConfig
+	Migrations() MigrationConfig
 }
 
 // Config holds all configuration for a Grove service, grouped by subsystem.
 type Config struct {
-	service ServiceConfig
-	http    HTTPConfig
-	db      DatabaseConfig
-	logger  LoggerConfig
+	service    ServiceConfig
+	http       HTTPConfig
+	db         DatabaseConfig
+	logger     LoggerConfig
+	migrations MigrationConfig
 }
 
 var _ Provider = (*Config)(nil)
@@ -107,6 +110,16 @@ type LoggerConfig struct {
 	Color string `env:"COLOR" envDefault:"auto"`
 }
 
+// MigrationConfig holds migration behavior configuration.
+type MigrationConfig struct {
+	// Mode controls what happens to database migrations during service startup.
+	// Valid values are:
+	//   - "off": do nothing at startup
+	//   - "validate": verify migrations are current; fail startup if not
+	//   - "up": run migrations automatically during startup
+	Mode string `env:"GROVE_MIGRATIONS" envDefault:"off"`
+}
+
 // Load reads configuration from environment variables. It applies sensible
 // defaults for any values that are not explicitly set.
 //
@@ -120,10 +133,11 @@ func Load(moduleName string) *Config {
 		panic(err)
 	}
 	return &Config{
-		service: loaded.Service,
-		http:    loaded.HTTP,
-		db:      loaded.Database,
-		logger:  loaded.Logger,
+		service:    loaded.Service,
+		http:       loaded.HTTP,
+		db:         loaded.Database,
+		logger:     loaded.Logger,
+		migrations: loaded.Migrations,
 	}
 }
 
@@ -147,6 +161,11 @@ func (c *Config) Logger() LoggerConfig {
 	return c.logger
 }
 
+// Migrations returns migration behavior configuration.
+func (c *Config) Migrations() MigrationConfig {
+	return c.migrations
+}
+
 //go:generate sh -c "go tool github.com/g4s8/envdoc -types=envConfig -output ../docs/environment.md && perl -0pi -e 's/\\n*\\z/\\n/' ../docs/environment.md"
 type envConfig struct {
 	// Service identity configuration.
@@ -160,6 +179,9 @@ type envConfig struct {
 
 	// Logger configuration.
 	Logger LoggerConfig `envPrefix:"LOG_"`
+
+	// Migration behavior configuration. Uses GROVE_MIGRATIONS directly.
+	Migrations MigrationConfig
 }
 
 func nonEmptyEnvironment() map[string]string {
