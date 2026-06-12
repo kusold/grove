@@ -3,11 +3,15 @@ package migrate
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"io/fs"
+	"regexp"
 	"testing"
 	"testing/fstest"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -341,5 +345,513 @@ func TestStatusDBError(t *testing.T) {
 	_, err := registry.Status(ctx, badPool(t))
 	if err == nil {
 		t.Fatal("Status() with unreachable DB returned nil error")
+	}
+}
+
+func TestSplitTableName(t *testing.T) {
+	t.Run("qualified name", func(t *testing.T) {
+		schema, table := splitTableName("public.grove_db_version")
+		if schema != "public" || table != "grove_db_version" {
+			t.Fatalf("splitTableName() = (%q, %q), want (public, grove_db_version)", schema, table)
+		}
+	})
+
+	t.Run("unqualified name", func(t *testing.T) {
+		schema, table := splitTableName("grove_db_version")
+		if schema != "public" || table != "grove_db_version" {
+			t.Fatalf("splitTableName() = (%q, %q), want (public, grove_db_version)", schema, table)
+		}
+	})
+}
+
+func TestAppliedMigrations(t *testing.T) {
+	t.Run("table does not exist", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		mock.ExpectQuery(regexp.QuoteMeta(`select exists (
+				select 1
+				from pg_tables
+				where schemaname = $1 and tablename = $2
+			)`)).
+			WithArgs("public", "grove_db_version").
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+
+		applied, exists, err := appliedMigrations(context.Background(), db, "public.grove_db_version")
+		if err != nil {
+			t.Fatalf("appliedMigrations() returned error: %v", err)
+		}
+		if exists {
+			t.Fatal("appliedMigrations() exists = true, want false")
+		}
+		if len(applied) != 0 {
+			t.Fatalf("appliedMigrations() returned %d entries, want 0", len(applied))
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unfulfilled expectations: %v", err)
+		}
+	})
+
+	t.Run("table exists with applied migrations", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		mock.ExpectQuery(regexp.QuoteMeta(`select exists (
+				select 1
+				from pg_tables
+				where schemaname = $1 and tablename = $2
+			)`)).
+			WithArgs("public", "grove_db_version").
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+		mock.ExpectQuery(regexp.QuoteMeta(
+			fmt.Sprintf("select version_id, is_applied, tstamp from %s order by id asc", "public.grove_db_version"),
+		)).
+			WillReturnRows(sqlmock.NewRows([]string{"version_id", "is_applied", "tstamp"}).
+				AddRow(int64(20260611154614), true, time.Now()))
+
+		applied, exists, err := appliedMigrations(context.Background(), db, "public.grove_db_version")
+		if err != nil {
+			t.Fatalf("appliedMigrations() returned error: %v", err)
+		}
+		if !exists {
+			t.Fatal("appliedMigrations() exists = false, want true")
+		}
+		if len(applied) != 1 {
+			t.Fatalf("appliedMigrations() returned %d entries, want 1", len(applied))
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unfulfilled expectations: %v", err)
+		}
+	})
+
+	t.Run("handles rolled-back migration", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		mock.ExpectQuery(regexp.QuoteMeta(`select exists (
+				select 1
+				from pg_tables
+				where schemaname = $1 and tablename = $2
+			)`)).
+			WithArgs("public", "svc_db_version").
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+		ts := time.Now()
+		mock.ExpectQuery(regexp.QuoteMeta(
+			fmt.Sprintf("select version_id, is_applied, tstamp from %s order by id asc", "public.svc_db_version"),
+		)).
+			WillReturnRows(sqlmock.NewRows([]string{"version_id", "is_applied", "tstamp"}).
+				AddRow(int64(1), true, ts).
+				AddRow(int64(1), false, ts.Add(time.Second)))
+
+		applied, exists, err := appliedMigrations(context.Background(), db, "public.svc_db_version")
+		if err != nil {
+			t.Fatalf("appliedMigrations() returned error: %v", err)
+		}
+		if !exists {
+			t.Fatal("appliedMigrations() exists = false, want true")
+		}
+		if _, ok := applied[1]; ok {
+			t.Fatal("rolled-back migration should be removed from applied map")
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unfulfilled expectations: %v", err)
+		}
+	})
+
+	t.Run("check version table query error", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		mock.ExpectQuery(regexp.QuoteMeta(`select exists (
+				select 1
+				from pg_tables
+				where schemaname = $1 and tablename = $2
+			)`)).
+			WithArgs("public", "svc_db_version").
+			WillReturnError(errors.New("connection refused"))
+
+		_, _, err = appliedMigrations(context.Background(), db, "public.svc_db_version")
+		if err == nil {
+			t.Fatal("appliedMigrations() returned nil error")
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unfulfilled expectations: %v", err)
+		}
+	})
+
+	t.Run("list version table query error", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		mock.ExpectQuery(regexp.QuoteMeta(`select exists (
+				select 1
+				from pg_tables
+				where schemaname = $1 and tablename = $2
+			)`)).
+			WithArgs("public", "svc_db_version").
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+		mock.ExpectQuery(regexp.QuoteMeta(
+			fmt.Sprintf("select version_id, is_applied, tstamp from %s order by id asc", "public.svc_db_version"),
+		)).
+			WillReturnError(errors.New("query failed"))
+
+		_, _, err = appliedMigrations(context.Background(), db, "public.svc_db_version")
+		if err == nil {
+			t.Fatal("appliedMigrations() returned nil error")
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unfulfilled expectations: %v", err)
+		}
+	})
+
+	t.Run("scan error", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		mock.ExpectQuery(regexp.QuoteMeta(`select exists (
+				select 1
+				from pg_tables
+				where schemaname = $1 and tablename = $2
+			)`)).
+			WithArgs("public", "svc_db_version").
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+		mock.ExpectQuery(regexp.QuoteMeta(
+			fmt.Sprintf("select version_id, is_applied, tstamp from %s order by id asc", "public.svc_db_version"),
+		)).
+			WillReturnRows(sqlmock.NewRows([]string{"version_id", "is_applied", "tstamp"}).
+				AddRow("not-an-int", true, time.Now()))
+
+		_, _, err = appliedMigrations(context.Background(), db, "public.svc_db_version")
+		if err == nil {
+			t.Fatal("appliedMigrations() returned nil error")
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unfulfilled expectations: %v", err)
+		}
+	})
+
+	t.Run("rows.Err error", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		mock.ExpectQuery(regexp.QuoteMeta(`select exists (
+				select 1
+				from pg_tables
+				where schemaname = $1 and tablename = $2
+			)`)).
+			WithArgs("public", "svc_db_version").
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+		rows := sqlmock.NewRows([]string{"version_id", "is_applied", "tstamp"}).
+			AddRow(int64(1), true, time.Now())
+		rows.RowError(0, errors.New("row iteration failed"))
+		mock.ExpectQuery(regexp.QuoteMeta(
+			fmt.Sprintf("select version_id, is_applied, tstamp from %s order by id asc", "public.svc_db_version"),
+		)).WillReturnRows(rows)
+
+		_, _, err = appliedMigrations(context.Background(), db, "public.svc_db_version")
+		if err == nil {
+			t.Fatal("appliedMigrations() returned nil error")
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unfulfilled expectations: %v", err)
+		}
+	})
+}
+
+func TestValidateSourceWithMockDB(t *testing.T) {
+	source := Source{
+		Name: "svc",
+		FS: fstest.MapFS{
+			"migrations/20260611160000_svc.sql": &fstest.MapFile{
+				Data: []byte("-- +goose Up\n-- +goose StatementBegin\nselect 1;\n-- +goose StatementEnd\n\n-- +goose Down\n-- +goose StatementBegin\nselect 1;\n-- +goose StatementEnd\n"),
+			},
+		},
+		Dir: "migrations",
+	}
+
+	t.Run("version table does not exist", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		mock.ExpectQuery(regexp.QuoteMeta(`select exists (
+				select 1
+				from pg_tables
+				where schemaname = $1 and tablename = $2
+			)`)).
+			WithArgs("public", "svc_db_version").
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+
+		err = validateSource(context.Background(), db, source)
+		if err == nil {
+			t.Fatal("validateSource() returned nil error for missing version table")
+		}
+		if err.Error() != "pending migrations detected" {
+			t.Fatalf("validateSource() error = %q, want pending migrations detected", err.Error())
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unfulfilled expectations: %v", err)
+		}
+	})
+
+	t.Run("pending migration", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		mock.ExpectQuery(regexp.QuoteMeta(`select exists (
+				select 1
+				from pg_tables
+				where schemaname = $1 and tablename = $2
+			)`)).
+			WithArgs("public", "svc_db_version").
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+		mock.ExpectQuery(regexp.QuoteMeta(
+			fmt.Sprintf("select version_id, is_applied, tstamp from %s order by id asc", "public.svc_db_version"),
+		)).
+			WillReturnRows(sqlmock.NewRows([]string{"version_id", "is_applied", "tstamp"}))
+
+		err = validateSource(context.Background(), db, source)
+		if err == nil {
+			t.Fatal("validateSource() returned nil error for pending migration")
+		}
+		if err.Error() != "pending migrations detected" {
+			t.Fatalf("validateSource() error = %q, want pending migrations detected", err.Error())
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unfulfilled expectations: %v", err)
+		}
+	})
+
+	t.Run("all migrations applied", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		mock.ExpectQuery(regexp.QuoteMeta(`select exists (
+				select 1
+				from pg_tables
+				where schemaname = $1 and tablename = $2
+			)`)).
+			WithArgs("public", "svc_db_version").
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+		mock.ExpectQuery(regexp.QuoteMeta(
+			fmt.Sprintf("select version_id, is_applied, tstamp from %s order by id asc", "public.svc_db_version"),
+		)).
+			WillReturnRows(sqlmock.NewRows([]string{"version_id", "is_applied", "tstamp"}).
+				AddRow(int64(20260611160000), true, time.Now()))
+
+		err = validateSource(context.Background(), db, source)
+		if err != nil {
+			t.Fatalf("validateSource() returned unexpected error: %v", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unfulfilled expectations: %v", err)
+		}
+	})
+
+	t.Run("check applied migrations error", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		mock.ExpectQuery(regexp.QuoteMeta(`select exists (
+				select 1
+				from pg_tables
+				where schemaname = $1 and tablename = $2
+			)`)).
+			WithArgs("public", "svc_db_version").
+			WillReturnError(errors.New("db error"))
+
+		err = validateSource(context.Background(), db, source)
+		if err == nil {
+			t.Fatal("validateSource() returned nil error")
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unfulfilled expectations: %v", err)
+		}
+	})
+}
+
+func TestSourceStatusWithMockDB(t *testing.T) {
+	source := Source{
+		Name: "svc",
+		FS: fstest.MapFS{
+			"migrations/20260611160000_svc.sql": &fstest.MapFile{
+				Data: []byte("-- +goose Up\n-- +goose StatementBegin\nselect 1;\n-- +goose StatementEnd\n\n-- +goose Down\n-- +goose StatementBegin\nselect 1;\n-- +goose StatementEnd\n"),
+			},
+		},
+		Dir: "migrations",
+	}
+
+	t.Run("table does not exist returns pending", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		mock.ExpectQuery(regexp.QuoteMeta(`select exists (
+				select 1
+				from pg_tables
+				where schemaname = $1 and tablename = $2
+			)`)).
+			WithArgs("public", "svc_db_version").
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+
+		status, err := sourceStatus(context.Background(), db, source)
+		if err != nil {
+			t.Fatalf("sourceStatus() returned error: %v", err)
+		}
+		if len(status) != 1 {
+			t.Fatalf("sourceStatus() returned %d entries, want 1", len(status))
+		}
+		if status[0].State != MigrationPending {
+			t.Fatalf("migration state = %q, want %q", status[0].State, MigrationPending)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unfulfilled expectations: %v", err)
+		}
+	})
+
+	t.Run("applied migration shows applied state", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		appliedAt := time.Now()
+		mock.ExpectQuery(regexp.QuoteMeta(`select exists (
+				select 1
+				from pg_tables
+				where schemaname = $1 and tablename = $2
+			)`)).
+			WithArgs("public", "svc_db_version").
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+		mock.ExpectQuery(regexp.QuoteMeta(
+			fmt.Sprintf("select version_id, is_applied, tstamp from %s order by id asc", "public.svc_db_version"),
+		)).
+			WillReturnRows(sqlmock.NewRows([]string{"version_id", "is_applied", "tstamp"}).
+				AddRow(int64(20260611160000), true, appliedAt))
+
+		status, err := sourceStatus(context.Background(), db, source)
+		if err != nil {
+			t.Fatalf("sourceStatus() returned error: %v", err)
+		}
+		if len(status) != 1 {
+			t.Fatalf("sourceStatus() returned %d entries, want 1", len(status))
+		}
+		if status[0].State != MigrationApplied {
+			t.Fatalf("migration state = %q, want %q", status[0].State, MigrationApplied)
+		}
+		if status[0].AppliedAt.IsZero() {
+			t.Fatal("applied migration missing AppliedAt timestamp")
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unfulfilled expectations: %v", err)
+		}
+	})
+
+	t.Run("db error", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		mock.ExpectQuery(regexp.QuoteMeta(`select exists (
+				select 1
+				from pg_tables
+				where schemaname = $1 and tablename = $2
+			)`)).
+			WithArgs("public", "svc_db_version").
+			WillReturnError(errors.New("db error"))
+
+		_, err = sourceStatus(context.Background(), db, source)
+		if err == nil {
+			t.Fatal("sourceStatus() returned nil error")
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unfulfilled expectations: %v", err)
+		}
+	})
+}
+
+func TestCollectMigrationFilesDuplicateVersion(t *testing.T) {
+	source := Source{
+		Name: "dup",
+		FS: fstest.MapFS{
+			"migrations/20260611160000_first.sql":  {},
+			"migrations/20260611160000_second.sql": {},
+		},
+		Dir: "migrations",
+	}
+
+	_, err := collectMigrationFiles(source)
+	if err == nil {
+		t.Fatal("collectMigrationFiles() returned nil error for duplicate versions")
+	}
+	if err.Error() != `duplicate migration version 20260611160000 in "20260611160000_first.sql" and "20260611160000_second.sql"` {
+		t.Fatalf("collectMigrationFiles() error = %q", err.Error())
+	}
+}
+
+func TestCollectMigrationFilesNonSQLFiles(t *testing.T) {
+	source := Source{
+		Name: "mixed",
+		FS: fstest.MapFS{
+			"migrations/README.md": {},
+		},
+		Dir: "migrations",
+	}
+
+	_, err := collectMigrationFiles(source)
+	if err == nil {
+		t.Fatal("collectMigrationFiles() returned nil error for non-SQL files")
+	}
+}
+
+func TestSubFSEmptyDir(t *testing.T) {
+	_, err := subFS(Source{FS: fstest.MapFS{}, Dir: ""})
+	if err == nil {
+		t.Fatal("subFS() with empty dir returned nil error")
 	}
 }
