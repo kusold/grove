@@ -57,6 +57,13 @@ func Run(ctx context.Context, module Module, opts ...Option) error {
 		wirePostgresLifecycle(app)
 	}
 
+	// Wire migration lifecycle after Postgres so that migrations run after DB
+	// connect but before HTTP serving readiness. The migration hook is appended
+	// after the postgres-connect hook, so it runs second during startup.
+	if app.hasCapability(capMigrations) {
+		wireMigrationsLifecycle(app)
+	}
+
 	if err := module.Register(ctx, app); err != nil {
 		return fmt.Errorf("module %q registration failed: %w", module.Name(), err)
 	}
@@ -156,6 +163,59 @@ func wirePostgresLifecycle(app *App) {
 		Name: "postgres",
 		Check: func(ctx context.Context) error {
 			return app.db.Ping(ctx)
+		},
+	})
+}
+
+// wireMigrationsLifecycle registers lifecycle hooks and readiness checks for the
+// migration capability. Migrations run after Postgres connects and before HTTP
+// readiness is signaled. The behavior is determined by GROVE_MIGRATIONS:
+//   - "off": skip entirely
+//   - "validate": check migrations are current, fail startup if not
+//   - "up": run pending migrations automatically
+func wireMigrationsLifecycle(app *App) {
+	mode := app.Config().Migrations().Mode
+
+	if mode == "off" {
+		return
+	}
+
+	app.Lifecycle().Append(lifecycle.Hook{
+		Name: "migrations",
+		Start: func(ctx context.Context) error {
+			pool := app.db.Pool()
+			if pool == nil {
+				return fmt.Errorf("migrations: database pool is not initialized")
+			}
+			switch mode {
+			case "validate":
+				if err := app.migrateReg.Validate(ctx, pool); err != nil {
+					return fmt.Errorf("migration validation: %w", err)
+				}
+				app.Logger().Info("migrations validated")
+			case "up":
+				if err := app.migrateReg.Run(ctx, pool); err != nil {
+					return fmt.Errorf("migration run: %w", err)
+				}
+				app.Logger().Info("migrations applied")
+			default:
+				return fmt.Errorf("migrations: unknown mode %q (valid: off, validate, up)", mode)
+			}
+			return nil
+		},
+	})
+
+	app.Health().RegisterReadiness(health.Check{
+		Name: "migrations",
+		Check: func(ctx context.Context) error {
+			if mode == "off" {
+				return nil
+			}
+			pool := app.db.Pool()
+			if pool == nil {
+				return fmt.Errorf("migrations: database pool is not initialized")
+			}
+			return app.migrateReg.Validate(ctx, pool)
 		},
 	})
 }
