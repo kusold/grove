@@ -260,11 +260,11 @@ func TestLoadDoesNotReadAllEnvVars(t *testing.T) {
 }
 
 func TestMigrationConfig(t *testing.T) {
-	t.Run("default migration mode is off", func(t *testing.T) {
+	t.Run("default migration mode is validate", func(t *testing.T) {
 		clearConfigEnv(t)
 		cfg := Load("test")
-		if cfg.Migrations().Mode != "off" {
-			t.Errorf("Migrations.Mode = %q, want %q", cfg.Migrations().Mode, "off")
+		if cfg.Migrations().Mode != "validate" {
+			t.Errorf("Migrations.Mode = %q, want %q", cfg.Migrations().Mode, "validate")
 		}
 	})
 
@@ -290,8 +290,8 @@ func TestMigrationConfig(t *testing.T) {
 		clearConfigEnv(t)
 		t.Setenv("GROVE_MIGRATIONS", "")
 		cfg := Load("test")
-		if cfg.Migrations().Mode != "off" {
-			t.Errorf("Migrations.Mode = %q, want %q when env var is empty", cfg.Migrations().Mode, "off")
+		if cfg.Migrations().Mode != "validate" {
+			t.Errorf("Migrations.Mode = %q, want %q when env var is empty", cfg.Migrations().Mode, "validate")
 		}
 	})
 }

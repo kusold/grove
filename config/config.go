@@ -15,7 +15,7 @@
 //	DATABASE_CONNECT_TIMEOUT — Postgres connection timeout (default: "5s")
 //	LOG_FORMAT       — log output format: "text" or "json" (default: "text")
 //	LOG_COLOR        — colorize text output: "on", "off", or "auto" (default: "auto")
-//	GROVE_MIGRATIONS — migration startup mode: "off", "validate", or "up" (default: "off")
+//	GROVE_MIGRATIONS — migration startup mode: "off", "validate", or "up" (default: "validate")
 //
 // If both Module.Name() and SERVICE_NAME are set, SERVICE_NAME overrides the
 // runtime config but does not change module identity. This distinction is
@@ -117,7 +117,7 @@ type MigrationConfig struct {
 	//   - "off": do nothing at startup
 	//   - "validate": verify migrations are current; fail startup if not
 	//   - "up": run migrations automatically during startup
-	Mode string `env:"GROVE_MIGRATIONS" envDefault:"off"`
+	Mode string `env:"GROVE_MIGRATIONS" envDefault:"validate"`
 }
 
 // Load reads configuration from environment variables. It applies sensible

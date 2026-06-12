@@ -417,8 +417,8 @@ func WithPostgres() Option {
 // migration sources against. The migration behavior at startup is controlled by
 // the GROVE_MIGRATIONS environment variable:
 //
-//	GROVE_MIGRATIONS=off       — skip migrations at startup (default)
-//	GROVE_MIGRATIONS=validate  — verify migrations are current; fail startup if not
+//	GROVE_MIGRATIONS=off       — skip migrations at startup
+//	GROVE_MIGRATIONS=validate  — verify migrations are current; fail startup if not (default)
 //	GROVE_MIGRATIONS=up        — run pending migrations automatically during startup
 //
 // Migrations require the Postgres capability. If WithPostgres() is not also
