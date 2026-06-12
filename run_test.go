@@ -1833,22 +1833,21 @@ func TestWireMigrationsLifecycle(t *testing.T) {
 		}
 	})
 
-	t.Run("default mode is off", func(t *testing.T) {
+	t.Run("default mode is validate", func(t *testing.T) {
 		clearConfigEnv(t)
 		app, err := NewApp("test", WithHTTP(), WithPostgres(), WithMigrations())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		wirePostgresLifecycle(app)
 		wireMigrationsLifecycle(app)
 
 		err = app.Health().IsReady(context.Background())
 		if err == nil {
 			t.Fatal("expected readiness to fail before Postgres connects")
 		}
-		if strings.Contains(err.Error(), "migrations") {
-			t.Errorf("readiness error should not mention migrations in default mode: %v", err)
+		if !strings.Contains(err.Error(), "migrations") {
+			t.Errorf("readiness error should mention migrations in default mode: %v", err)
 		}
 	})
 }
