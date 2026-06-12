@@ -9,6 +9,7 @@ import (
 	"github.com/kusold/grove/health"
 	"github.com/kusold/grove/httpx"
 	"github.com/kusold/grove/lifecycle"
+	"github.com/kusold/grove/migrate"
 )
 
 // App is the central runtime object for a Grove service. It holds private state
@@ -23,6 +24,7 @@ type App struct {
 	healthReg    *health.Registry
 	httpReg      *httpx.Registry
 	db           *db.Database
+	migrateReg   *migrate.Registry
 }
 
 // Name returns the service name, derived from Module.Name().
@@ -88,6 +90,25 @@ func (a *App) RequireDB() (*db.Database, error) {
 		return nil, err
 	}
 	return a.db, nil
+}
+
+// RequireMigrations returns the migration registry when the migrations capability
+// is enabled. It returns a helpful error when migrations were not enabled via
+// grove.WithMigrations(). Services should use this during module registration to
+// register their own migration sources.
+//
+// Example:
+//
+//	reg, err := app.RequireMigrations()
+//	if err != nil {
+//	    return err
+//	}
+//	reg.Register(migrate.Source{Name: "myservice", FS: migrationFS, Dir: "migrations"})
+func (a *App) RequireMigrations() (*migrate.Registry, error) {
+	if err := a.requireCapability(capMigrations); err != nil {
+		return nil, err
+	}
+	return a.migrateReg, nil
 }
 
 // hasCapability reports whether a capability is enabled.

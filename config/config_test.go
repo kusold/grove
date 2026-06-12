@@ -17,6 +17,7 @@ func clearConfigEnv(t *testing.T) {
 		"DATABASE_CONNECT_TIMEOUT",
 		"LOG_FORMAT",
 		"LOG_COLOR",
+		"GROVE_MIGRATIONS",
 	} {
 		t.Setenv(key, "")
 	}
@@ -107,6 +108,7 @@ func TestLoad(t *testing.T) {
 		t.Setenv("DATABASE_MIN_CONNS", "2")
 		t.Setenv("DATABASE_CONNECT_TIMEOUT", "7s")
 		t.Setenv("LOG_FORMAT", "json")
+		t.Setenv("GROVE_MIGRATIONS", "up")
 
 		cfg := Load("unused-module-name")
 		if cfg.Service().Name != "my-service" {
@@ -141,6 +143,9 @@ func TestLoad(t *testing.T) {
 		}
 		if cfg.Logger().Format != "json" {
 			t.Errorf("Logger.Format = %q, want %q", cfg.Logger().Format, "json")
+		}
+		if cfg.Migrations().Mode != "up" {
+			t.Errorf("Migrations.Mode = %q, want %q", cfg.Migrations().Mode, "up")
 		}
 	})
 }
@@ -250,6 +255,43 @@ func TestLoadDoesNotReadAllEnvVars(t *testing.T) {
 		cfg := Load("test")
 		if cfg.Service().Name != "test" {
 			t.Errorf("unexpected change from random env var")
+		}
+	})
+}
+
+func TestMigrationConfig(t *testing.T) {
+	t.Run("default migration mode is validate", func(t *testing.T) {
+		clearConfigEnv(t)
+		cfg := Load("test")
+		if cfg.Migrations().Mode != "validate" {
+			t.Errorf("Migrations.Mode = %q, want %q", cfg.Migrations().Mode, "validate")
+		}
+	})
+
+	t.Run("GROVE_MIGRATIONS=up overrides default", func(t *testing.T) {
+		clearConfigEnv(t)
+		t.Setenv("GROVE_MIGRATIONS", "up")
+		cfg := Load("test")
+		if cfg.Migrations().Mode != "up" {
+			t.Errorf("Migrations.Mode = %q, want %q", cfg.Migrations().Mode, "up")
+		}
+	})
+
+	t.Run("GROVE_MIGRATIONS=validate overrides default", func(t *testing.T) {
+		clearConfigEnv(t)
+		t.Setenv("GROVE_MIGRATIONS", "validate")
+		cfg := Load("test")
+		if cfg.Migrations().Mode != "validate" {
+			t.Errorf("Migrations.Mode = %q, want %q", cfg.Migrations().Mode, "validate")
+		}
+	})
+
+	t.Run("empty GROVE_MIGRATIONS is treated as unset", func(t *testing.T) {
+		clearConfigEnv(t)
+		t.Setenv("GROVE_MIGRATIONS", "")
+		cfg := Load("test")
+		if cfg.Migrations().Mode != "validate" {
+			t.Errorf("Migrations.Mode = %q, want %q when env var is empty", cfg.Migrations().Mode, "validate")
 		}
 	})
 }

@@ -27,3 +27,9 @@ used.
    - `LOG_COLOR` (default: `auto`) - ANSI colorization for text log output. Valid values are "on" (always
 colorize), "off" (never colorize), and "auto" (colorize only when output
 is a terminal). Colorization is only applied when Format is "text".
+ - Migration behavior configuration. Uses GROVE_MIGRATIONS directly.
+   - `GROVE_MIGRATIONS` (default: `validate`) - Mode controls what happens to database migrations during service startup.
+Valid values are:
+  - "off": do nothing at startup
+  - "validate": verify migrations are current; fail startup if not
+  - "up": run migrations automatically during startup

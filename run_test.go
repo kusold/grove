@@ -50,6 +50,7 @@ func clearConfigEnv(t *testing.T) {
 		"DATABASE_CONNECT_TIMEOUT",
 		"LOG_FORMAT",
 		"LOG_COLOR",
+		"GROVE_MIGRATIONS",
 	} {
 		t.Setenv(key, "")
 	}
@@ -1674,6 +1675,179 @@ func TestWithPostgres(t *testing.T) {
 		}
 		if err := app.Health().IsReady(context.Background()); err == nil {
 			t.Fatal("readiness should fail before Postgres connects")
+		}
+	})
+}
+
+func TestWithMigrations(t *testing.T) {
+	t.Run("enables migrations capability", func(t *testing.T) {
+		app, err := NewApp("test", WithPostgres(), WithMigrations())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !app.hasCapability(capMigrations) {
+			t.Error("expected migrations capability to be enabled")
+		}
+	})
+
+	t.Run("is idempotent", func(t *testing.T) {
+		app, err := NewApp("test", WithPostgres(), WithMigrations(), WithMigrations())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !app.hasCapability(capMigrations) {
+			t.Error("expected migrations capability to be enabled")
+		}
+	})
+
+	t.Run("fails when Postgres is not enabled", func(t *testing.T) {
+		_, err := NewApp("test", WithMigrations())
+		if err == nil {
+			t.Fatal("expected error when WithMigrations is used without WithPostgres")
+		}
+		if !strings.Contains(err.Error(), "migrations requires postgres") {
+			t.Errorf("error = %q, want to contain 'migrations requires postgres'", err.Error())
+		}
+		if !strings.Contains(err.Error(), "grove.WithPostgres()") {
+			t.Errorf("error = %q, want to contain 'grove.WithPostgres()'", err.Error())
+		}
+	})
+
+	t.Run("fails with clear error via Run", func(t *testing.T) {
+		m := testModule{name: "migrations-no-pg"}
+		err := Run(context.Background(), m, WithMigrations())
+		if err == nil {
+			t.Fatal("expected error when WithMigrations is used without WithPostgres")
+		}
+		if !strings.Contains(err.Error(), "migrations requires postgres") {
+			t.Errorf("error = %q, want to contain 'migrations requires postgres'", err.Error())
+		}
+	})
+
+	t.Run("RequireMigrations returns error when not enabled", func(t *testing.T) {
+		app, err := NewApp("test", WithPostgres())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		reg, err := app.RequireMigrations()
+		if err == nil {
+			t.Fatal("expected error when RequireMigrations called without WithMigrations")
+		}
+		if reg != nil {
+			t.Error("expected nil registry when capability not enabled")
+		}
+		if !strings.Contains(err.Error(), "migrations capability is required but was not enabled") {
+			t.Errorf("error = %q, want to contain 'migrations capability is required but was not enabled'", err.Error())
+		}
+		if !strings.Contains(err.Error(), "grove.WithMigrations()") {
+			t.Errorf("error = %q, want to contain 'grove.WithMigrations()'", err.Error())
+		}
+	})
+
+	t.Run("RequireMigrations returns registry when enabled", func(t *testing.T) {
+		app, err := NewApp("test", WithPostgres(), WithMigrations())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		reg, err := app.RequireMigrations()
+		if err != nil {
+			t.Fatalf("unexpected error from RequireMigrations: %v", err)
+		}
+		if reg == nil {
+			t.Fatal("expected non-nil registry")
+		}
+	})
+
+	t.Run("RequireMigrations returns same registry on each call", func(t *testing.T) {
+		app, err := NewApp("test", WithPostgres(), WithMigrations())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		reg1, err := app.RequireMigrations()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		reg2, err := app.RequireMigrations()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if reg1 != reg2 {
+			t.Error("RequireMigrations should return the same registry each time")
+		}
+	})
+
+	t.Run("works alongside HTTP, tenancy, and Postgres", func(t *testing.T) {
+		app, err := NewApp("test", WithHTTP(), WithTenancy(), WithPostgres(), WithMigrations())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !app.hasCapability(capMigrations) {
+			t.Error("expected migrations capability to be enabled")
+		}
+		reg, err := app.RequireMigrations()
+		if err != nil {
+			t.Fatalf("unexpected error from RequireMigrations: %v", err)
+		}
+		if reg == nil {
+			t.Fatal("expected non-nil registry")
+		}
+	})
+
+	t.Run("dependency order does not matter", func(t *testing.T) {
+		app, err := NewApp("test", WithMigrations(), WithPostgres())
+		if err != nil {
+			t.Fatalf("expected no error when Postgres provided after migrations, got: %v", err)
+		}
+		if !app.hasCapability(capMigrations) {
+			t.Error("expected migrations capability to be enabled")
+		}
+	})
+}
+
+func TestWireMigrationsLifecycle(t *testing.T) {
+	t.Run("off mode does not register lifecycle hooks", func(t *testing.T) {
+		clearConfigEnv(t)
+		t.Setenv("GROVE_MIGRATIONS", "off")
+		app, err := NewApp("test", WithHTTP(), WithPostgres(), WithMigrations())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		wirePostgresLifecycle(app)
+		wireMigrationsLifecycle(app)
+
+		// Health should only have postgres readiness (no migrations check)
+		ctx := context.Background()
+		if err := app.Health().IsHealthy(ctx); err != nil {
+			t.Fatalf("health should not depend on migrations: %v", err)
+		}
+		// Readiness will fail because postgres isn't connected, but migrations
+		// readiness check should not be registered in off mode
+		err = app.Health().IsReady(ctx)
+		if err == nil {
+			t.Fatal("expected readiness to fail before Postgres connects")
+		}
+		// The error should only mention postgres, not migrations
+		if strings.Contains(err.Error(), "migrations") {
+			t.Errorf("readiness error should not mention migrations in off mode: %v", err)
+		}
+	})
+
+	t.Run("default mode is validate", func(t *testing.T) {
+		clearConfigEnv(t)
+		app, err := NewApp("test", WithHTTP(), WithPostgres(), WithMigrations())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		wireMigrationsLifecycle(app)
+
+		err = app.Health().IsReady(context.Background())
+		if err == nil {
+			t.Fatal("expected readiness to fail before Postgres connects")
+		}
+		if !strings.Contains(err.Error(), "migrations") {
+			t.Errorf("readiness error should mention migrations in default mode: %v", err)
 		}
 	})
 }
