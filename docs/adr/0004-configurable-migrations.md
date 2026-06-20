@@ -67,6 +67,14 @@ The migration registry should support Grove-owned migrations, such as the RLS
 prelude, and service-owned migrations, such as Canopy's demo tables and
 policies. Migration ordering must be deterministic.
 
+Migration connections will use an explicit default Postgres `search_path` of
+`public,grove` unless the service configures a search path in its connection
+string. This keeps unqualified service-owned DDL in `public` by default while
+still making Grove-owned helper objects available under the `grove` schema.
+Services that want application tables in another schema should either
+schema-qualify those objects in their migrations or explicitly configure their
+migration connection search path.
+
 ## Consequences
 
 Migration behavior is visible in configuration and can be chosen per service or
