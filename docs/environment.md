@@ -15,7 +15,10 @@ used as the runtime name.
 requests during graceful shutdown.
  - Postgres database configuration.
    - `DATABASE_URL` - Postgres application connection URL. It is required when the Postgres
-capability connects to the database.
+capability connects to the database. Grove's migration runner defaults the
+migration connection search_path to "public,grove" when the URL does not
+provide one; set a search_path connection parameter to target a
+service-owned schema with unqualified migration DDL.
    - `DATABASE_ADMIN_URL` - Privileged Postgres connection URL for system transactions that need to
 bypass tenant RLS. It is optional at startup, but required when SystemTx is
 used.

@@ -7,6 +7,12 @@
 // service-owned migrations so tenant-scoped tables can reference Grove database
 // helpers in their own migration files.
 //
+// Migration connections default their Postgres search_path to public,grove. This
+// keeps unqualified service-owned DDL out of Grove's helper schema while still
+// allowing policies to reference Grove-owned helpers. Services can set an
+// explicit connection search_path or schema-qualify DDL when they intentionally
+// use a service-owned schema.
+//
 // Each migration source (Grove-owned and service-owned) uses its own goose
 // version table named <source>_db_version to avoid version number collisions
 // between sources. This allows independent timestamp-based versioning per source.

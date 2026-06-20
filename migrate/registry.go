@@ -15,6 +15,8 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
+const defaultMigrationSearchPath = "public,grove"
+
 // Source identifies an embedded migration collection.
 type Source struct {
 	// Name is a stable label for logging and diagnostics.
@@ -105,8 +107,10 @@ func (r *Registry) Sources() []Source {
 // service-owned), and each source uses its own goose version table to avoid
 // cross-source version collisions.
 //
-// The pgxpool.Pool is used to open a database/sql connection via pgx/stdlib
-// for goose compatibility. The caller is responsible for closing the pool.
+// The pgxpool.Pool's connection config is used to open a database/sql
+// connection via pgx/stdlib for goose compatibility. Migration connections use
+// an explicit search_path so unqualified service DDL lands in public while
+// Grove-owned helpers remain available under the grove schema.
 func (r *Registry) Run(ctx context.Context, pool *pgxpool.Pool) error {
 	if r == nil {
 		return errors.New("migrate: registry is nil")
@@ -114,7 +118,7 @@ func (r *Registry) Run(ctx context.Context, pool *pgxpool.Pool) error {
 	if pool == nil {
 		return errors.New("migrate: pool is required")
 	}
-	db := stdlib.OpenDBFromPool(pool)
+	db := openMigrationDB(pool)
 	defer func() { _ = db.Close() }()
 
 	for _, source := range r.sources {
@@ -135,7 +139,7 @@ func (r *Registry) Validate(ctx context.Context, pool *pgxpool.Pool) error {
 	if pool == nil {
 		return errors.New("migrate: pool is required")
 	}
-	db := stdlib.OpenDBFromPool(pool)
+	db := openMigrationDB(pool)
 	defer func() { _ = db.Close() }()
 
 	for _, source := range r.sources {
@@ -158,6 +162,26 @@ func (r *Registry) Validate(ctx context.Context, pool *pgxpool.Pool) error {
 // "grove" when a "grove" schema exists from the RLS prelude).
 func tableName(source Source) string {
 	return "public." + sanitizeName(source.Name) + "_db_version"
+}
+
+func openMigrationDB(pool *pgxpool.Pool) *sql.DB {
+	poolConfig := pool.Config()
+	connConfig := poolConfig.ConnConfig.Copy()
+	if connConfig.RuntimeParams == nil {
+		connConfig.RuntimeParams = make(map[string]string, 1)
+	}
+	if strings.TrimSpace(connConfig.RuntimeParams["search_path"]) == "" {
+		connConfig.RuntimeParams["search_path"] = defaultMigrationSearchPath
+	}
+
+	var opts []stdlib.OptionOpenDB
+	if poolConfig.BeforeConnect != nil {
+		opts = append(opts, stdlib.OptionBeforeConnect(poolConfig.BeforeConnect))
+	}
+	if poolConfig.AfterConnect != nil {
+		opts = append(opts, stdlib.OptionAfterConnect(poolConfig.AfterConnect))
+	}
+	return stdlib.OpenDB(*connConfig, opts...)
 }
 
 // sanitizeName replaces non-alphanumeric characters with underscores to
@@ -243,7 +267,7 @@ func (r *Registry) Status(ctx context.Context, pool *pgxpool.Pool) (map[string][
 		return nil, errors.New("migrate: pool is required")
 	}
 
-	db := stdlib.OpenDBFromPool(pool)
+	db := openMigrationDB(pool)
 	defer func() { _ = db.Close() }()
 
 	statuses := make(map[string][]MigrationStatus, len(r.sources))

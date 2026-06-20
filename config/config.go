@@ -81,7 +81,10 @@ type HTTPConfig struct {
 // environment. The db package parses and validates these values for pgx.
 type DatabaseConfig struct {
 	// Postgres application connection URL. It is required when the Postgres
-	// capability connects to the database.
+	// capability connects to the database. Grove's migration runner defaults the
+	// migration connection search_path to "public,grove" when the URL does not
+	// provide one; set a search_path connection parameter to target a
+	// service-owned schema with unqualified migration DDL.
 	URL string `env:"URL"`
 
 	// Privileged Postgres connection URL for system transactions that need to

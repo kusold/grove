@@ -114,19 +114,13 @@ drop table if exists test_widgets;
 			t.Fatalf("Run() returned unexpected error: %v", err)
 		}
 
-		// Verify the service table exists.
-		var tableExists bool
-		err = pool.QueryRow(ctx, `
-			select exists(
-				select 1 from information_schema.tables
-				where table_name = 'test_widgets'
-			)
-		`).Scan(&tableExists)
-		if err != nil {
-			t.Fatalf("check test_widgets table: %v", err)
+		// Unqualified service DDL should land in public, not Grove's helper
+		// schema, even when the database user is named "grove".
+		if !tableExistsInSchema(t, ctx, pool, "public", "test_widgets") {
+			t.Fatal("test_widgets table was not created in public schema")
 		}
-		if !tableExists {
-			t.Fatal("test_widgets table was not created by service migration")
+		if tableExistsInSchema(t, ctx, pool, "grove", "test_widgets") {
+			t.Fatal("test_widgets table should not be created in grove schema")
 		}
 	})
 
@@ -176,20 +170,23 @@ drop table if exists tenant_widgets;
 			t.Fatalf("Run() returned unexpected error: %v", err)
 		}
 
-		// Verify the table has RLS enabled. Search both public and grove schemas
-		// since the migration may create the table in the grove schema's search_path.
+		// Verify the table has RLS enabled in the public schema. Unqualified
+		// service DDL must not drift into Grove's helper schema.
 		var rlsForced bool
 		err = pool.QueryRow(ctx, `
-			select relforcerowsecurity
-			from pg_class c
-			join pg_namespace n on c.relnamespace = n.oid
-			where c.relname = 'tenant_widgets'
-		`).Scan(&rlsForced)
+				select relforcerowsecurity
+				from pg_class c
+				join pg_namespace n on c.relnamespace = n.oid
+				where n.nspname = 'public' and c.relname = 'tenant_widgets'
+			`).Scan(&rlsForced)
 		if err != nil {
 			t.Fatalf("check RLS on tenant_widgets: %v", err)
 		}
 		if !rlsForced {
 			t.Fatal("tenant_widgets should have forced row level security")
+		}
+		if tableExistsInSchema(t, ctx, pool, "grove", "tenant_widgets") {
+			t.Fatal("tenant_widgets table should not be created in grove schema")
 		}
 	})
 
@@ -574,16 +571,21 @@ func connectPool(t *testing.T, ctx context.Context, databaseURL string) *pgxpool
 
 func versionTableExists(t *testing.T, ctx context.Context, pool *pgxpool.Pool, table string) bool {
 	t.Helper()
+	return tableExistsInSchema(t, ctx, pool, "public", table)
+}
+
+func tableExistsInSchema(t *testing.T, ctx context.Context, pool *pgxpool.Pool, schema, table string) bool {
+	t.Helper()
 	var exists bool
 	err := pool.QueryRow(ctx, `
 		select exists(
 			select 1
 			from information_schema.tables
-			where table_schema = 'public' and table_name = $1
+			where table_schema = $1 and table_name = $2
 		)
-	`, table).Scan(&exists)
+	`, schema, table).Scan(&exists)
 	if err != nil {
-		t.Fatalf("check version table %q: %v", table, err)
+		t.Fatalf("check table %s.%s: %v", schema, table, err)
 	}
 	return exists
 }
